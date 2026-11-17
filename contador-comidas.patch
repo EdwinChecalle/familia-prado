@@ -1,0 +1,194 @@
+diff --git a/mobile/lib/screens/turns_screen.dart b/mobile/lib/screens/turns_screen.dart
+--- a/mobile/lib/screens/turns_screen.dart
++++ b/mobile/lib/screens/turns_screen.dart
+@@ -12,27 +12,111 @@
+   int selected = 0;
+   List<dynamic> checks = [];
+   bool submitting = false;
++  String? _loadedMonday;
++  String? _checksError;
++  bool _loadingChecks = false;
++  int _checksRequestId = 0;
+   @override void initState(){super.initState();refresh();}
+-  void refresh(){ data=Future.wait([
+-    widget.api.get('/api/turns?from=${isoDate(firstMonday(peruToday()))}&weeks=8'),
+-    widget.api.get('/api/members'),widget.api.get('/api/auth/me'),widget.api.get('/api/swaps')
+-  ]); data.then((result) { if(mounted) fetchChecks(result[0][selected]['monday']); }).catchError((Object error) {}); }
++  void refresh() {
++    // Descarta resultados antiguos de una carga previa de la pantalla.
++    final requestId = ++_checksRequestId;
++    data = Future.wait([
++      widget.api.get('/api/turns?from=${isoDate(firstMonday(peruToday()))}&weeks=8'),
++      widget.api.get('/api/members'),
++      widget.api.get('/api/auth/me'),
++      widget.api.get('/api/swaps'),
++    ]);
++    data.then((result) {
++      if (!mounted || requestId != _checksRequestId) return;
++      final weeks = result[0] as List;
++      if (weeks.isNotEmpty) fetchChecks(weeks[selected]['monday'] as String);
++    }).catchError((Object error) {});
++  }
++
+   Future<void> fetchChecks(String monday) async {
+-    try {final result=await widget.api.get('/api/turns/$monday/meals');
+-      if(mounted) setState(() => checks = result as List<dynamic>);
+-    } catch (_) {if(mounted) setState(() => checks=[]);}
+-  }
+-  void reload(){setState(() {selected=0;checks=[];refresh();});}
+-  void notice(String message){if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(message)));}
+-  bool done(String date,String type) => checks.any((x) => x['date']==date&&x['meal']==type&&x['completed']==true);
+-  Future<void> toggle(String monday,String date,String type) async {
+-    if(submitting)return;
+-    setState(() => submitting=true);
++    final requestId = ++_checksRequestId;
++    if (!mounted) return;
++    setState(() {
++      _loadedMonday = null;
++      _loadingChecks = true;
++      _checksError = null;
++      checks = [];
++    });
+     try {
+-      await widget.api.put('/api/turns/$monday/meals',{'date':date,'meal':type,'completed':!done(date,type)});
+-      await fetchChecks(monday);
+-    } catch(e){notice(e.toString());}
+-    finally {if(mounted)setState(() => submitting=false);}
++      final result = await widget.api.get('/api/turns/$monday/meals');
++      if (!mounted || requestId != _checksRequestId) return;
++      setState(() {
++        checks = List<dynamic>.from(result as List);
++        _loadedMonday = monday;
++        _loadingChecks = false;
++      });
++    } catch (_) {
++      if (!mounted || requestId != _checksRequestId) return;
++      setState(() {
++        _loadingChecks = false;
++        _checksError = 'No se pudieron cargar las comidas de esta semana.';
++      });
++    }
++  }
++
++  void reload() {
++    setState(() {
++      selected = 0;
++      checks = [];
++      _loadedMonday = null;
++      _checksError = null;
++      _loadingChecks = true;
++      refresh();
++    });
++  }
++
++  void notice(String message) {
++    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
++  }
++
++  bool done(String date, String type) => checks.any((x) =>
++    x['date'] == date && x['meal'] == type && x['completed'] == true);
++
++  Future<void> toggle(String monday, String date, String type) async {
++    if (submitting || _loadingChecks || _loadedMonday != monday) return;
++
++    // El contador y los botones utilizan la MISMA lista local de comidas.
++    final before = checks.map((x) => Map<String, dynamic>.from(x as Map)).toList();
++    final updated = before.map((x) => Map<String, dynamic>.from(x)).toList();
++    final nextValue = !done(date, type);
++    final index = updated.indexWhere((x) => x['date'] == date && x['meal'] == type);
++    if (index == -1) {
++      updated.add({'date': date, 'meal': type, 'completed': nextValue});
++    } else {
++      updated[index]['completed'] = nextValue;
++    }
++    setState(() {
++      submitting = true;
++      checks = updated; // Cambio inmediato, incluso sin respuesta del servidor.
++    });
++
++    try {
++      await widget.api.put('/api/turns/$monday/meals', {
++        'date': date, 'meal': type, 'completed': nextValue,
++      });
++      // Reconciliar con PostgreSQL. Si falla esta consulta, no se revierte un PUT exitoso.
++      try {
++        final server = await widget.api.get('/api/turns/$monday/meals');
++        if (mounted && _loadedMonday == monday) {
++          setState(() => checks = List<dynamic>.from(server as List));
++        }
++      } catch (_) {
++        notice('Comida guardada, pero no se pudo comprobar el estado actualizado.');
++      }
++    } catch (e) {
++      // El PUT fue rechazado: recuperar el estado anterior en la semana correcta.
++      if (mounted && _loadedMonday == monday) {
++        setState(() => checks = before);
++      }
++      notice('No se pudo guardar la comida. Se revirtió el cambio: $e');
++    } finally {
++      if (mounted) setState(() => submitting = false);
++    }
+   }
+ 
+   Future<void> configure(List<dynamic> members) async {
+@@ -118,6 +202,12 @@
+       me=snap.data![2] as Map<String,dynamic>, swaps=snap.data![3] as List;
+     final current=weeks[selected] as Map<String,dynamic>;
+     final monday=parseDate(current['monday'] as String);
++    // Mientras llegan las comidas usamos el total del servidor; después, la lista
++    // de la semana seleccionada es la única fuente del contador y los botones.
++    final completedMeals = _loadedMonday == current['monday']
++        ? checks.where((x) => x['completed'] == true).length
++        : ((current['completedMeals'] as num?)?.toInt() ?? 0);
++    final canEditChecks = _loadedMonday == current['monday'] && !_loadingChecks && !submitting;
+     return RefreshIndicator(onRefresh:()async {reload();await data;},child:ListView(padding:const EdgeInsets.all(16),children:[
+       if(current['configured']!=true) Card(child:Padding(padding:const EdgeInsets.all(14),child:Column(
+         crossAxisAlignment:CrossAxisAlignment.start,children:[
+@@ -133,7 +223,10 @@
+           return ChoiceChip(selected:selected==index,showCheckmark:false,
+             label:Padding(padding:const EdgeInsets.symmetric(vertical:8),child:Column(mainAxisSize:MainAxisSize.min,
+               children:[Text('Semana ${index+1}'),Text(w['memberName'],style:const TextStyle(fontWeight:FontWeight.bold))])),
+-            onSelected:(_){setState(()=>selected=index);fetchChecks(w['monday']);});
++            onSelected:submitting ? null : (_){
++              setState(() => selected=index);
++              fetchChecks(w['monday'] as String);
++            });
+         })),
+       const SizedBox(height:14),
+       Card(child:Padding(padding:const EdgeInsets.all(18),child:Column(
+@@ -143,13 +236,25 @@
+           Text(current['memberName'],style:Theme.of(context).textTheme.titleLarge),
+           Text('Desde el lunes ${dateSpanish(monday)} hasta el domingo ${dateSpanish(monday.add(const Duration(days:6)))}'),
+           const SizedBox(height:8),
+-          Text('${current['completedMeals']} de 21 comidas registradas'),
++          Text('$completedMeals de 21 comidas registradas'),
+           if(current['configured']==true && monday.isAfter(firstMonday(peruToday())) &&
+               (me['role']=='ADMIN'||me['memberId']==current['memberId']))
+             OutlinedButton.icon(onPressed:()=>swap(current['monday'],weeks),
+               icon:const Icon(Icons.swap_horiz),label:const Text('Pedir cambio de semana')),
+         ]))),
+       const SizedBox(height:8),
++      if (_loadingChecks) const LinearProgressIndicator(),
++      if (_checksError != null) Card(child: Padding(
++        padding: const EdgeInsets.all(12),
++        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
++          Text(_checksError!),
++          TextButton.icon(
++            onPressed: () => fetchChecks(current['monday'] as String),
++            icon: const Icon(Icons.refresh),
++            label: const Text('Reintentar'),
++          ),
++        ]),
++      )),
+       if(me['role']!='ADMIN' && me['memberId']!=current['memberId'])
+         const Padding(padding:EdgeInsets.all(12),child:Text('Solo el familiar encargado puede marcar las comidas de esta semana.')),
+       ...List.generate(7,(day){
+@@ -163,7 +268,7 @@
+                 Icon(done(key,meal.$1)?Icons.check_circle:Icons.radio_button_unchecked,
+                   color:done(key,meal.$1)?const Color(0xFF2E785B):Colors.grey),
+                 const SizedBox(width:10),Expanded(child:Text(meal.$2,style:const TextStyle(fontSize:17))),
+-                OutlinedButton(onPressed:submitting||current['configured']!=true || date.isAfter(peruToday()) ||
++                OutlinedButton(onPressed:!canEditChecks||current['configured']!=true || date.isAfter(peruToday()) ||
+                     (me['role']!='ADMIN'&&me['memberId']!=current['memberId'])?null:
+                   ()=>toggle(current['monday'],key,meal.$1),
+                   child:Text(done(key,meal.$1)?'Desmarcar':'Marcar')),

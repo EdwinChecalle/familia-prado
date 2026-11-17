@@ -1,0 +1,11 @@
+.env
+**/.gradle/
+**/build/
+**/.dart_tool/
+**/.idea/
+**/*.iml
+**/.flutter-plugins*
+**/local.properties
+**/Pods/
+**/.DS_Store
+**/target/
