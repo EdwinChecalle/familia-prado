@@ -1,14 +1,29 @@
 import 'package:flutter/material.dart';
 import '../core/api.dart';
+import '../core/live_updates.dart';
 
 class AppointmentsScreen extends StatefulWidget {
-  const AppointmentsScreen({super.key, required this.api});
+  const AppointmentsScreen({super.key, required this.api, required this.updates});
   final FamilyApi api;
+  final LiveUpdates updates;
   @override State<AppointmentsScreen> createState()=>_AppointmentsScreenState();
 }
 class _AppointmentsScreenState extends State<AppointmentsScreen> {
   late Future<List<dynamic>> data;
-  @override void initState(){super.initState();refresh();}
+  @override void initState(){
+    super.initState();
+    refresh();
+    widget.updates.addListener(_onUpdate);
+  }
+  void _onUpdate() {
+    if (widget.updates.lastTopic == 'appointments' || widget.updates.lastTopic == 'all') {
+      if (mounted) reload();
+    }
+  }
+  @override void dispose() {
+    widget.updates.removeListener(_onUpdate);
+    super.dispose();
+  }
   void refresh(){data=Future.wait([widget.api.get('/api/appointments'),
     widget.api.get('/api/members'),widget.api.get('/api/auth/me')]);}
   void reload(){setState(refresh);}

@@ -15,8 +15,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class RotationService {
     private final JdbcTemplate db;
+    private final ChangeFeed feed;
     private static final ZoneId PERU=ZoneId.of("America/Lima");
-    public RotationService(JdbcTemplate db) { this.db=db; }
+    public RotationService(JdbcTemplate db,ChangeFeed feed) { this.db=db;this.feed=feed; }
     public record Member(UUID id,String name,int position) {}
     public record Week(LocalDate monday,LocalDate sunday,UUID memberId,String memberName,int completedMeals,boolean configured) {}
     public record Config(LocalDate anchorMonday,int anchorPosition,boolean confirmed) {}
@@ -79,6 +80,7 @@ public class RotationService {
                changed_by=EXCLUDED.changed_by,changed_at=NOW()
             """,UUID.randomUUID(),java.sql.Date.valueOf(mon),java.sql.Date.valueOf(date),
             meal,completed,Session.current().userId());
+        feed.changed("turns");
     }
     @Transactional
     public void configure(LocalDate anchor,List<UUID> ordered,UUID first) {
@@ -100,6 +102,7 @@ public class RotationService {
             db.update("UPDATE family_members SET rotation_position=? WHERE id=?",i+1,ordered.get(i));
         db.update("UPDATE rotation_config SET anchor_monday=?,anchor_position=?,confirmed=true WHERE id=1",
             java.sql.Date.valueOf(anchor),ordered.indexOf(first)+1);
+        feed.changed("turns");
     }
     public record Swap(UUID id,LocalDate weekA,LocalDate weekB,UUID memberA,UUID memberB,String status) {}
     public List<Swap> swaps() {
@@ -126,6 +129,7 @@ public class RotationService {
         UUID id=UUID.randomUUID();
         db.update("INSERT INTO swap_requests(id,week_a,week_b,member_a,member_b,requested_by,status) VALUES(?,?,?,?,?,?,'PENDING')",
             id,java.sql.Date.valueOf(a),java.sql.Date.valueOf(b),ma.id(),mb.id(),Session.current().userId());
+        feed.changed("turns");
         return id;
     }
     @Transactional
@@ -150,5 +154,6 @@ public class RotationService {
         }
         db.update("UPDATE swap_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?",
           accept?"ACCEPTED":"REJECTED",Session.current().userId(),id);
+        feed.changed("turns");
     }
 }

@@ -12,10 +12,11 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class FundService {
     private final JdbcTemplate db;
-    public FundService(JdbcTemplate db){this.db=db;}
+    private final ChangeFeed feed;
+    public FundService(JdbcTemplate db,ChangeFeed feed){this.db=db;this.feed=feed;}
     public record Collection(UUID id,String concept,BigDecimal amountPerMember,LocalDate dueDate) {}
     public record Payment(UUID id,UUID collectionId,UUID memberId,BigDecimal amount,String method,String reference,String status) {}
-    public record Expense(UUID id,String concept,BigDecimal amount,String receiptReference,String status) {}
+    public record Expense(UUID id,String concept,BigDecimal amount,String receiptReference,String status,String registeredBy,String reviewedBy) {}
     public record Summary(BigDecimal collected,BigDecimal spent,BigDecimal available) {}
     private static void validAmount(BigDecimal v) {
         if(v==null||v.signum()<=0||v.scale()>2||v.compareTo(new BigDecimal("99999999"))>0)
@@ -37,6 +38,7 @@ public class FundService {
         UUID id=UUID.randomUUID();
         db.update("INSERT INTO collections(id,concept,amount_per_member,due_date,created_by) VALUES(?,?,?,?,?)",
           id,concept.strip(),amount,due==null?null:java.sql.Date.valueOf(due),Session.current().userId());
+        feed.changed("fund");
         return id;
     }
     public List<Payment> payments(UUID collection) {
@@ -67,6 +69,7 @@ public class FundService {
           INSERT INTO contributions(id,collection_id,member_id,amount,payment_method,payment_reference,status,submitted_by)
           VALUES(?,?,?,?,?,?,'SUBMITTED',?)
           """,id,collection,member,amount,method,reference,Session.current().userId());
+        feed.changed("fund");
         return id;
     }
     @Transactional public void reviewPayment(UUID id,boolean verify) {
@@ -77,11 +80,23 @@ public class FundService {
         if(!status.getFirst().equals("SUBMITTED")) throw new ResponseStatusException(HttpStatus.CONFLICT,"Aporte ya revisado");
         db.update("UPDATE contributions SET status=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?",
           verify?"VERIFIED":"REJECTED",Session.current().userId(),id);
+        feed.changed("fund");
     }
     public List<Expense> expenses() {
-        return db.query("SELECT id,concept,amount,receipt_reference,status FROM expenses ORDER BY created_at DESC",
-          (r,n)->new Expense(r.getObject("id",UUID.class),r.getString("concept"),r.getBigDecimal("amount"),
-            r.getString("receipt_reference"),r.getString("status")));
+        return db.query("""
+            SELECT e.id,e.concept,e.amount,e.receipt_reference,e.status,
+                   COALESCE(requester.display_name,'Administrador') AS registered_by,
+                   CASE WHEN e.reviewed_by IS NULL THEN NULL
+                     ELSE COALESCE(reviewer.display_name,'Administrador') END AS reviewed_by_name
+            FROM expenses e
+            JOIN app_users requester_user ON requester_user.id=e.requested_by
+            LEFT JOIN family_members requester ON requester.id=requester_user.member_id
+            LEFT JOIN app_users reviewer_user ON reviewer_user.id=e.reviewed_by
+            LEFT JOIN family_members reviewer ON reviewer.id=reviewer_user.member_id
+            ORDER BY e.created_at DESC
+            """,(r,n)->new Expense(r.getObject("id",UUID.class),r.getString("concept"),r.getBigDecimal("amount"),
+              r.getString("receipt_reference"),r.getString("status"),r.getString("registered_by"),
+              r.getString("reviewed_by_name")));
     }
     @Transactional public UUID requestExpense(String concept,BigDecimal amount,String receipt) {
         validAmount(amount);
@@ -90,6 +105,7 @@ public class FundService {
         UUID id=UUID.randomUUID();
         db.update("INSERT INTO expenses(id,concept,amount,receipt_reference,status,requested_by) VALUES(?,?,?,?,'REQUESTED',?)",
           id,concept.strip(),amount,receipt,Session.current().userId());
+        feed.changed("fund");
         return id;
     }
     @Transactional public void reviewExpense(UUID id,boolean approve) {
@@ -105,5 +121,6 @@ public class FundService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,"La caja no tiene dinero suficiente");
         db.update("UPDATE expenses SET status=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?",
            approve?"APPROVED":"REJECTED",Session.current().userId(),id);
+        feed.changed("fund");
     }
 }

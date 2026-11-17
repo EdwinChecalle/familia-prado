@@ -1,14 +1,29 @@
 import 'package:flutter/material.dart';
 import '../core/api.dart';
+import '../core/live_updates.dart';
 
 class FundScreen extends StatefulWidget {
-  const FundScreen({super.key,required this.api});
+  const FundScreen({super.key,required this.api, required this.updates});
   final FamilyApi api;
+  final LiveUpdates updates;
   @override State<FundScreen> createState()=>_FundScreenState();
 }
 class _FundScreenState extends State<FundScreen> {
   late Future<List<dynamic>> data;
-  @override void initState(){super.initState();refresh();}
+  @override void initState(){
+    super.initState();
+    refresh();
+    widget.updates.addListener(_onUpdate);
+  }
+  void _onUpdate() {
+    if (widget.updates.lastTopic == 'fund' || widget.updates.lastTopic == 'all') {
+      if (mounted) reload();
+    }
+  }
+  @override void dispose() {
+    widget.updates.removeListener(_onUpdate);
+    super.dispose();
+  }
   void refresh(){data=Future.wait([
     widget.api.get('/api/fund/summary'),widget.api.get('/api/fund/collections'),
     widget.api.get('/api/fund/expenses'),widget.api.get('/api/auth/me'),widget.api.get('/api/members'),
@@ -140,7 +155,9 @@ class _FundScreenState extends State<FundScreen> {
       if(expenses.isEmpty)const Padding(padding:EdgeInsets.all(20),child:Text('No se han registrado gastos todavía.')),
       ...expenses.map((e)=>Card(child:ListTile(title:Text(e['concept']),
         subtitle:Text('S/ ${e['amount']} — ${e['status']=='APPROVED'?'Gasto aprobado':
-           e['status']=='REJECTED'?'Gasto rechazado':'Esperando aprobación'}'),
+           e['status']=='REJECTED'?'Gasto rechazado':'Esperando aprobación'}\n'
+           'Registrado por: ${e['registeredBy'] ?? 'No disponible'}'
+           '${e['reviewedBy'] != null ? '\nRevisado por: ${e['reviewedBy']}' : ''}'),
         trailing:me['role']=='ADMIN'&&e['status']=='REQUESTED'?Wrap(spacing:4,children:[
           IconButton(tooltip:'Aprobar gasto',onPressed:()=>review('/api/fund/expenses/${e['id']}/review',true),
             icon:const Icon(Icons.check_circle_outline)),

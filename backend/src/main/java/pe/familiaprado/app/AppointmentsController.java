@@ -11,7 +11,8 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/appointments")
 public class AppointmentsController {
     private final JdbcTemplate db;
-    public AppointmentsController(JdbcTemplate db){ this.db=db; }
+    private final ChangeFeed feed;
+    public AppointmentsController(JdbcTemplate db,ChangeFeed feed){this.db=db;this.feed=feed;}
     public record Appointment(UUID id,Instant appointmentAt,String hospital,String specialty,
                               UUID responsibleMemberId,String status,String preparation) {}
     @GetMapping public List<Appointment> list(@RequestParam(required=false) Instant after){
@@ -39,6 +40,7 @@ public class AppointmentsController {
           VALUES(?,?,?,?,?,'PLANNED',?,?)
           """,id,java.sql.Timestamp.from(r.appointmentAt()),r.hospital().strip(),r.specialty().strip(),
             r.responsibleMemberId(),r.preparation(),Session.current().userId());
+        feed.changed("appointments");
         return Map.of("id",id);
     }
     public record ChangeStatus(String status) {}
@@ -56,5 +58,6 @@ public class AppointmentsController {
         if(List.of("COMPLETED","CANCELLED").contains(rows.getFirst().getValue()))
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Cita cerrada");
         db.update("UPDATE appointments SET status=? WHERE id=?",r.status(),id);
+        feed.changed("appointments");
     }
 }
