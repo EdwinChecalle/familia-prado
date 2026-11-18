@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/api.dart';
+import '../ui/prado_design.dart';
 
 class MembersScreen extends StatefulWidget {
   const MembersScreen({super.key, required this.api, required this.onLogout});
@@ -46,29 +47,79 @@ class _MembersScreenState extends State<MembersScreen> {
         await widget.api.logout(localOnly:true);if(mounted)widget.onLogout();}
     }catch(e){notice(e);}finally{old.dispose();newPass.dispose();}
   }
-  @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(future:data,builder:(ctx,snap){
-    if(!snap.hasData)return Center(child:snap.hasError?Text('${snap.error}'):const CircularProgressIndicator());
-    final members=snap.data![0] as List,me=snap.data![1] as Map<String,dynamic>;
-    return RefreshIndicator(onRefresh:()async{reload();await data;},child:ListView(padding:const EdgeInsets.all(16),children:[
-      Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(
-        crossAxisAlignment:CrossAxisAlignment.start,children:[
-          Text('Tu cuenta: ${me['email']}',style:const TextStyle(fontWeight:FontWeight.bold)),
-          const SizedBox(height:8),Text(me['role']=='ADMIN'?'Administrador familiar':'Miembro de la familia'),
-          TextButton.icon(onPressed:changePassword,icon:const Icon(Icons.key),
-            label:const Text('Cambiar mi contraseña')),
-        ]))),
-      const SizedBox(height:12),Text('Los ocho hijos',style:Theme.of(context).textTheme.titleLarge),
-      const Text('Orden inicial provisional: debe confirmarse antes de registrar turnos reales.'),
-      const SizedBox(height:10),
-      ...members.map((m)=>Card(child:ListTile(
-        leading:CircleAvatar(child:Text('${m['position']}')),
-        title:Text(m['name'],style:const TextStyle(fontSize:18,fontWeight:FontWeight.w600)),
-        subtitle:Text('Lugar ${m['position']} en la rotación'),
-        trailing:me['role']=='ADMIN'?IconButton(tooltip:'Crear acceso a ${m['name']}',
-          icon:const Icon(Icons.person_add_alt),onPressed:()=>createAccount(m)):null,
-      ))),
-      const SizedBox(height:12),
-      const Text('El acceso de la familia es privado. Ninguna contraseña debe compartirse en el grupo de WhatsApp.'),
-    ]));
-  });
+  @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
+    future: data, builder: (context, snap) {
+      if (!snap.hasData) return Center(child: snap.hasError
+        ? Text('No se pudieron cargar los familiares: ${snap.error}')
+        : const CircularProgressIndicator());
+      final members = snap.data![0] as List;
+      final me = snap.data![1] as Map<String, dynamic>;
+      final ordered = [...members]..sort((a, b) =>
+        ((a['position'] as num?)?.toInt() ?? 0).compareTo(
+          (b['position'] as num?)?.toInt() ?? 0));
+      return RefreshIndicator(onRefresh: () async { reload(); await data; },
+        child: ListView(padding: const EdgeInsets.all(16), children: [
+          const PradoIntro(eyebrow: 'Siempre juntos', title: 'Nuestra familia',
+            subtitle: 'Ocho hermanos organizados para acompañar a Papá Isidro.',
+            icon: Icons.family_restroom_outlined, tint: PradoColors.peach),
+          PradoPanel(tint: PradoColors.paleBlue,
+            child: Row(children: [
+              Container(width: 48, height: 48, decoration: BoxDecoration(
+                color: PradoColors.navy, borderRadius: BorderRadius.circular(16)),
+                child: const Icon(Icons.person_outline, color: Colors.white)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(me['role'] == 'ADMIN' ? 'Cuenta Administrador' : 'Mi cuenta',
+                    style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 3),
+                  Text('${me['email']}', maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: PradoColors.muted, fontSize: 14)),
+                  const SizedBox(height: 6),
+                  const Text('El acceso es personal y privado.',
+                    style: TextStyle(color: PradoColors.muted, fontSize: 13)),
+                ])),
+            ])),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(onPressed: changePassword,
+            icon: const Icon(Icons.lock_outline),
+            label: const Text('Cambiar mi contraseña')),
+          const SizedBox(height: 18),
+          PradoSectionHeading('Los ocho hijos',
+            subtitle: 'Nombres y orden en el calendario familiar.'),
+          for (var i = 0; i < ordered.length; i++)
+            Padding(padding: const EdgeInsets.only(bottom: 10),
+              child: PradoPanel(child: Row(children: [
+                Container(height: 54, width: 54,
+                  decoration: BoxDecoration(color: i.isEven
+                    ? PradoColors.mint : PradoColors.paleSand,
+                    borderRadius: BorderRadius.circular(17)),
+                  child: Center(child: Text(
+                    '${ordered[i]['name']}'.isNotEmpty
+                      ? '${ordered[i]['name']}'.substring(0, 1).toUpperCase() : '?',
+                    style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800,
+                      color: PradoColors.navy)))),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${ordered[i]['name']}',
+                      style: Theme.of(context).textTheme.titleSmall),
+                    Text('Turno ${(ordered[i]['position'] ?? i+1)} en la rotación',
+                      style: const TextStyle(color: PradoColors.muted, fontSize: 14)),
+                  ])),
+                if (me['role'] == 'ADMIN') IconButton(
+                  tooltip: 'Crear una cuenta para ${ordered[i]['name']}',
+                  icon: const Icon(Icons.person_add_alt_1_outlined,
+                    color: PradoColors.ocean),
+                  onPressed: () => createAccount(Map<String, dynamic>.from(ordered[i] as Map)))
+                else const Icon(Icons.favorite_outline, color: PradoColors.coral),
+              ]))),
+          const SizedBox(height: 16),
+          PradoPanel(tint: PradoColors.paleSand,
+            child: const PradoInfoRow(icon: Icons.shield_outlined,
+              text: 'Las contraseñas y los documentos médicos son privados. '
+                'No compartas tu acceso por WhatsApp.')),
+          const SizedBox(height: 24),
+        ]));
+    });
 }

@@ -1,7 +1,7 @@
 name: familia_prado
 description: Aplicación móvil privada para la organización de Familia Prado.
 publish_to: none
-version: 0.3.2+4
+version: 0.3.5+5
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:

@@ -2,6 +2,7 @@ package pe.familiaprado.app;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -17,7 +18,7 @@ public class FundService {
     public FundService(JdbcTemplate db,ChangeFeed feed,PushQueue push){this.db=db;this.feed=feed;this.push=push;}
     public record Collection(UUID id,String concept,BigDecimal amountPerMember,LocalDate dueDate) {}
     public record Payment(UUID id,UUID collectionId,UUID memberId,BigDecimal amount,String method,String reference,String status) {}
-    public record Expense(UUID id,String concept,BigDecimal amount,String receiptReference,String status,String registeredBy,String reviewedBy) {}
+    public record Expense(UUID id,String concept,BigDecimal amount,String receiptReference,String status,String registeredBy,String reviewedBy,Instant createdAt) {}
     public record Summary(BigDecimal collected,BigDecimal spent,BigDecimal available) {}
     private static void validAmount(BigDecimal v) {
         if(v==null||v.signum()<=0||v.scale()>2||v.compareTo(new BigDecimal("99999999"))>0)
@@ -86,7 +87,7 @@ public class FundService {
     }
     public List<Expense> expenses() {
         return db.query("""
-            SELECT e.id,e.concept,e.amount,e.receipt_reference,e.status,
+            SELECT e.id,e.concept,e.amount,e.receipt_reference,e.status,e.created_at,
                    COALESCE(requester.display_name,'Administrador') AS registered_by,
                    CASE WHEN e.reviewed_by IS NULL THEN NULL
                      ELSE COALESCE(reviewer.display_name,'Administrador') END AS reviewed_by_name
@@ -98,7 +99,7 @@ public class FundService {
             ORDER BY e.created_at DESC
             """,(r,n)->new Expense(r.getObject("id",UUID.class),r.getString("concept"),r.getBigDecimal("amount"),
               r.getString("receipt_reference"),r.getString("status"),r.getString("registered_by"),
-              r.getString("reviewed_by_name")));
+              r.getString("reviewed_by_name"),r.getTimestamp("created_at").toInstant()));
     }
     @Transactional public UUID requestExpense(String concept,BigDecimal amount,String receipt) {
         validAmount(amount);
