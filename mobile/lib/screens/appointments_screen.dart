@@ -3,6 +3,7 @@ import '../core/api.dart';
 import '../core/live_updates.dart';
 import '../core/appointment_filters.dart';
 import '../ui/prado_design.dart';
+import '../ui/family_report.dart';
 
 class AppointmentsScreen extends StatefulWidget {
   const AppointmentsScreen({super.key, required this.api, required this.updates});
@@ -221,6 +222,31 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
     return 'Programada';
   }
 
+  Future<void> _shareNextAppointment() async {
+    final next = summary['next'];
+    if (next is! Map) { _notice('No hay una próxima cita programada.'); return; }
+    final names = {for (final m in members) m['id']: m['name']};
+    final day = peruClock('${next['appointmentAt']}');
+    final hour = '${day.hour.toString().padLeft(2, '0')}:${day.minute.toString().padLeft(2, '0')}';
+    await showFamilyReport(context, FamilyReport(
+      title: 'Próxima cita de Papá Isidro',
+      subtitle: 'Información de organización familiar',
+      mainLabel: 'FECHA Y HORA · PERÚ',
+      mainValue: '${dateSpanish(day)} · $hour',
+      lines: [
+        ReportLine('Consulta', '${next['specialty']}'),
+        ReportLine('Lugar', '${next['hospital']}'),
+        ReportLine('Acompañante',
+          '${names[next['responsibleMemberId']] ?? 'Por asignar'}'),
+        ReportLine('Estado', next['status'] == 'CONFIRMED'
+          ? 'Confirmada' : 'Programada'),
+      ],
+      generatedLabel: peruReportStamp(),
+      privacy: 'No incluye diagnósticos, medicamentos ni indicaciones médicas. '
+          'Comparte solo con quienes deben conocer la cita.',
+    ));
+  }
+
   Widget _appointmentCard(Map<String, dynamic> a, Map<dynamic, dynamic> names) {
     final day = peruClock(a['appointmentAt'] as String);
     final hour = '${day.hour.toString().padLeft(2, '0')}:${day.minute.toString().padLeft(2, '0')}';
@@ -298,6 +324,10 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> {
               Text('${next['hospital']} · ${names[next['responsibleMemberId']] ?? 'Por asignar'}',
                 style: const TextStyle(color: PradoColors.muted, fontSize: 15)),
             ])),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(onPressed: _shareNextAppointment,
+            icon: const Icon(Icons.ios_share_outlined),
+            label: const Text('Compartir próxima cita en imagen')),
           const SizedBox(height: 14),
         ],
         if (me['role'] == 'ADMIN') ...[

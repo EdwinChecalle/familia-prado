@@ -3,6 +3,8 @@ package pe.familiaprado.app;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.sql.Timestamp;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,6 +31,59 @@ public class FundService {
         BigDecimal out=db.queryForObject("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE status='APPROVED'",BigDecimal.class);
         return new Summary(in,out,in.subtract(out));
     }
+    public record ReportMovement(String kind,String concept,BigDecimal amount,
+        String registeredBy, Instant confirmedAt) {}
+    public record FundReport(LocalDate from,LocalDate to, Instant generatedAt,
+        BigDecimal opening,BigDecimal verified,BigDecimal approved,BigDecimal closing,
+        List<ReportMovement> recentMovements) {}
+    private static final ZoneId LIMA=ZoneId.of("America/Lima");
+
+    private BigDecimal verifiedBefore(Instant exclusive) {
+        return db.queryForObject("""
+            SELECT COALESCE(SUM(amount),0) FROM contributions
+            WHERE status='VERIFIED' AND reviewed_at < ?
+            """, BigDecimal.class, Timestamp.from(exclusive));
+    }
+    private BigDecimal approvedBefore(Instant exclusive) {
+        return db.queryForObject("""
+            SELECT COALESCE(SUM(amount),0) FROM expenses
+            WHERE status='APPROVED' AND reviewed_at < ?
+            """, BigDecimal.class, Timestamp.from(exclusive));
+    }
+    public FundReport report(LocalDate from, LocalDate to) {
+        Session.current();
+        if (!FundReportMath.validRange(from, to))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "El periodo debe contener entre 1 y 367 días");
+        Instant start=from.atStartOfDay(LIMA).toInstant();
+        Instant end=to.plusDays(1).atStartOfDay(LIMA).toInstant();
+        BigDecimal beforeIn=verifiedBefore(start), beforeOut=approvedBefore(start);
+        BigDecimal endIn=verifiedBefore(end), endOut=approvedBefore(end);
+        BigDecimal opening=beforeIn.subtract(beforeOut);
+        BigDecimal verified=endIn.subtract(beforeIn);
+        BigDecimal approved=endOut.subtract(beforeOut);
+        var movements=db.query("""
+            SELECT kind,concept,amount,registered_by,confirmed_at FROM (
+              SELECT 'IN' AS kind, c.concept AS concept, p.amount,
+                     NULL::text AS registered_by,p.reviewed_at AS confirmed_at,p.id
+              FROM contributions p JOIN collections c ON c.id=p.collection_id
+              WHERE p.status='VERIFIED' AND p.reviewed_at>=? AND p.reviewed_at<?
+              UNION ALL
+              SELECT 'OUT', e.concept, e.amount,COALESCE(f.display_name,'Administración'),
+                     e.reviewed_at,e.id
+              FROM expenses e
+              JOIN app_users u ON u.id=e.requested_by
+              LEFT JOIN family_members f ON f.id=u.member_id
+              WHERE e.status='APPROVED' AND e.reviewed_at>=? AND e.reviewed_at<?
+            ) movements ORDER BY confirmed_at DESC, id DESC LIMIT 8
+            """, (r,n)->new ReportMovement(r.getString("kind"),r.getString("concept"),
+              r.getBigDecimal("amount"),r.getString("registered_by"),
+              r.getTimestamp("confirmed_at").toInstant()),
+              Timestamp.from(start),Timestamp.from(end),Timestamp.from(start),Timestamp.from(end));
+        return new FundReport(from,to,Instant.now(),opening,verified,approved,
+            FundReportMath.closing(opening,verified,approved),movements);
+    }
+
     public List<Collection> collections() {
         return db.query("SELECT id,concept,amount_per_member,due_date FROM collections ORDER BY created_at DESC",
           (r,n)->new Collection(r.getObject("id",UUID.class),r.getString("concept"),r.getBigDecimal("amount_per_member"),r.getObject("due_date",LocalDate.class)));

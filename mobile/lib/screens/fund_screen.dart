@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/live_updates.dart';
 import '../ui/prado_design.dart';
+import '../ui/family_report.dart';
 
 class FundScreen extends StatefulWidget {
   const FundScreen({super.key,required this.api, required this.updates});
@@ -104,6 +105,43 @@ class _FundScreenState extends State<FundScreen> {
     try{await widget.api.post(path,{'accept':accept});reload();notice('Operación registrada');}
     catch(e){notice(e);}
   }
+  Future<void> _shareFundReport() async {
+    try {
+      final now = peruToday();
+      final start = DateTime(now.year, now.month, 1);
+      final end = DateTime(now.year, now.month + 1, 0);
+      final report = await widget.api.get(
+        '/api/fund/report?from=${isoDate(start)}&to=${isoDate(end)}',
+      ) as Map<String, dynamic>;
+      if (!mounted) return;
+      final rows = <ReportLine>[
+        ReportLine('Saldo al inicio del mes', pradoMoney(report['opening'])),
+        ReportLine('Aportes verificados', '+ ${pradoMoney(report['verified'])}'),
+        ReportLine('Gastos aprobados', '- ${pradoMoney(report['approved'])}'),
+      ];
+      final movements = report['recentMovements'] as List? ?? [];
+      for (final movement in movements.take(2)) {
+        final m = movement as Map;
+        rows.add(ReportLine(
+          '${m['kind'] == 'IN' ? 'Aporte: ' : 'Gasto: '}${m['concept']}',
+          '${m['kind'] == 'IN' ? '+' : '-'} ${pradoMoney(m['amount'])}',
+        ));
+      }
+      await showFamilyReport(context, FamilyReport(
+        title: 'Resumen de caja familiar',
+        subtitle: 'Del ${dateSpanish(start)} al ${dateSpanish(end)}',
+        mainLabel: 'SALDO AL CIERRE DEL PERIODO',
+        mainValue: pradoMoney(report['closing']),
+        lines: rows,
+        generatedLabel: peruReportStamp(),
+        privacy: 'Solo se contabilizan aportes verificados y gastos aprobados. '
+            'Al compartir una imagen, sus datos salen de la aplicación.',
+      ));
+    } catch (e) {
+      notice('No se pudo preparar el reporte de caja: $e');
+    }
+  }
+
   @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
     future: data, builder: (context, snap) {
       if (!snap.hasData) return Center(child: snap.hasError
@@ -138,6 +176,10 @@ class _FundScreenState extends State<FundScreen> {
                   pradoMoney(summary['spent'])),
               ]),
             ])),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(onPressed: _shareFundReport,
+            icon: const Icon(Icons.ios_share_outlined),
+            label: const Text('Generar resumen en imagen')),
           const SizedBox(height: 15),
           if (me['role'] == 'ADMIN') ...[
             FilledButton.icon(onPressed: collect, icon: const Icon(Icons.add),

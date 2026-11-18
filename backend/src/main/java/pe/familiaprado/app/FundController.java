@@ -2,6 +2,7 @@ package pe.familiaprado.app;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import org.springframework.format.annotation.DateTimeFormat;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +13,11 @@ public class FundController {
     private final FundService s;
     public FundController(FundService s) {this.s=s;}
     @GetMapping("/summary") public FundService.Summary summary(){ return s.summary(); }
+    @GetMapping("/report") public FundService.FundReport report(
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return s.report(from,to);
+    }
     @GetMapping("/collections") public List<FundService.Collection> collections(){return s.collections();}
     public record NewCollection(String concept,BigDecimal amountPerMember,LocalDate dueDate) {}
     @PostMapping("/collections") @ResponseStatus(HttpStatus.CREATED)

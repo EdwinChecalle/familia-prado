@@ -1,0 +1,22 @@
+# Demo limitada: el servicio Free duerme tras 15 minutos sin solicitudes.
+services:
+  - type: web
+    name: familia-prado-demo
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: DB_URL
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: CARE_DOCUMENTS_ENABLED
+        value: 'false'
+      - key: SPRING_PROFILES_ACTIVE
+        value: staging
+# FCM requiere además Firebase Admin. Sin credenciales y con el backend dormido,
+# no se garantiza el envío oportuno de recordatorios.

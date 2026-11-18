@@ -20,10 +20,18 @@ public class CareDocumentsController {
     private final JdbcTemplate db;
     private final CareAccess access;
     private final String storage;
-    public CareDocumentsController(JdbcTemplate db,CareAccess access,@Value("${CARE_DOCUMENT_DIR:}") String storage){
-        this.db=db;this.access=access;this.storage=storage;
+    private final boolean enabled;
+    public CareDocumentsController(JdbcTemplate db,CareAccess access,
+            @Value("${CARE_DOCUMENT_DIR:}") String storage,
+            @Value("${CARE_DOCUMENTS_ENABLED:true}") boolean enabled){
+        this.db=db;this.access=access;this.storage=storage;this.enabled=enabled;
+    }
+    private void checkEnabled(){
+        if (!enabled) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+            "Los documentos médicos están deshabilitados en este entorno");
     }
     private Path root(){
+        checkEnabled();
         if(storage.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
             "Configura CARE_DOCUMENT_DIR en .env fuera del repositorio");
         Path path=Path.of(storage).toAbsolutePath().normalize();
@@ -35,6 +43,7 @@ public class CareDocumentsController {
                            Instant uploadedAt,String uploadedBy){}
     @GetMapping public List<Document> list(){
         access.require();
+        checkEnabled();
         return db.query("""
             SELECT d.id,d.title,d.category,d.original_name,d.mime_type,d.size_bytes,d.uploaded_at,
                    COALESCE(m.display_name,'Administrador') author
@@ -59,6 +68,7 @@ public class CareDocumentsController {
     public Map<String,UUID> upload(@RequestParam String title,@RequestParam String category,
                                    @RequestPart("file") MultipartFile file){
         Session.current().adminOnly();
+        checkEnabled();
         if(title==null || title.isBlank() || title.length()>140 ||
            category==null || !List.of("RECIPE","EXAM","ORDER","OTHER").contains(category))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Revisa el título o la categoría");
@@ -89,6 +99,7 @@ public class CareDocumentsController {
     }
     @GetMapping("/{id}/download") public ResponseEntity<byte[]> download(@PathVariable UUID id){
         access.require();
+        checkEnabled();
         var rows=db.query("SELECT stored_name,original_name,mime_type FROM care_documents WHERE id=?",
              (r,n)->new String[]{r.getString(1),r.getString(2),r.getString(3)},id);
         if(rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Documento no encontrado");

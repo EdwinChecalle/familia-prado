@@ -1,0 +1,12 @@
+server:
+  forward-headers-strategy: framework
+management:
+  endpoint:
+    health:
+      show-details: never
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 3
+      minimum-idle: 0
+      connection-timeout: 30000

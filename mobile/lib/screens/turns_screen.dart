@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/live_updates.dart';
+import '../core/month_calendar.dart';
 import '../ui/prado_design.dart';
+import '../ui/family_report.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class TurnsScreen extends StatefulWidget {
@@ -14,7 +16,7 @@ class TurnsScreen extends StatefulWidget {
 class _TurnsScreenState extends State<TurnsScreen> {
   late Future<List<dynamic>> data;
   int selected = 0;
-  int cyclePage = 0; // 16-week pages, including earlier cycles.
+  DateTime visibleMonth = DateTime(peruToday().year, peruToday().month);
   List<dynamic> checks = [];
   bool submitting = false;
   bool agendaView = true;
@@ -24,6 +26,9 @@ class _TurnsScreenState extends State<TurnsScreen> {
   int _checksRequestId = 0;
   @override void initState(){
     super.initState();
+    final today = peruToday();
+    selected = firstMonday(today)
+        .difference(firstMonday(DateTime(today.year, today.month, 1))).inDays ~/ 7;
     refresh();
     _restoreView();
     widget.updates.addListener(_onUpdate);
@@ -58,7 +63,7 @@ class _TurnsScreenState extends State<TurnsScreen> {
     // Descarta resultados antiguos de una carga previa de la pantalla.
     final requestId = ++_checksRequestId;
     data = Future.wait([
-      widget.api.get('/api/turns?from=${isoDate(firstMonday(peruToday()).add(Duration(days:cyclePage*16*7)))}&weeks=16'),
+      widget.api.get('/api/turns?from=${isoDate(firstMonday(DateTime(visibleMonth.year, visibleMonth.month, 1)))}&weeks=16'),
       widget.api.get('/api/members'),
       widget.api.get('/api/auth/me'),
       widget.api.get('/api/swaps'),
@@ -98,7 +103,6 @@ class _TurnsScreenState extends State<TurnsScreen> {
 
   void reload() {
     setState(() {
-      selected = 0;
       checks = [];
       _loadedMonday = null;
       _checksError = null;
@@ -107,15 +111,48 @@ class _TurnsScreenState extends State<TurnsScreen> {
     });
   }
 
-  void _changePage(int direction) {
+  void _changeMonth(int direction) {
+    if (submitting) return;
     setState(() {
-      cyclePage += direction;
+      visibleMonth = DateTime(visibleMonth.year, visibleMonth.month + direction);
       selected = 0;
       checks = [];
       _loadedMonday = null;
-      _loadingChecks = true;
       refresh();
     });
+  }
+
+  void _goToday() {
+    final today = peruToday();
+    setState(() {
+      visibleMonth = DateTime(today.year, today.month);
+      final beginning = firstMonday(DateTime(today.year, today.month, 1));
+      selected = firstMonday(today).difference(beginning).inDays ~/ 7;
+      checks = [];
+      _loadedMonday = null;
+      refresh();
+    });
+  }
+
+  void _chooseWeek(int index, String monday) {
+    if (submitting) return;
+    setState(() => selected = index);
+    fetchChecks(monday);
+  }
+
+  bool _overlapsMonth(String mondayText) => weekIntersectsMonth(
+      parseDate(mondayText), visibleMonth.year, visibleMonth.month);
+
+  String _weekTitle(String mondayText) {
+    final mon = parseDate(mondayText);
+    final sun = mon.add(const Duration(days: 6));
+    return '${mon.day}/${mon.month} – ${sun.day}/${sun.month}';
+  }
+
+  String get _monthTitle {
+    const names = ['enero','febrero','marzo','abril','mayo','junio',
+      'julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    return '${names[visibleMonth.month - 1]} ${visibleMonth.year}';
   }
 
   void notice(String message) {
@@ -242,6 +279,27 @@ class _TurnsScreenState extends State<TurnsScreen> {
     catch(e){notice(e.toString());}
   }
 
+  Future<void> _shareWeek(Map<String, dynamic> week) async {
+    final monday = parseDate(week['monday'] as String);
+    final sunday = monday.add(const Duration(days: 6));
+    await showFamilyReport(context, FamilyReport(
+      title: 'Semana de comidas',
+      subtitle: 'Organización de Papá Isidro',
+      mainLabel: 'RESPONSABLE ASIGNADO',
+      mainValue: '${week['memberName']}',
+      lines: [
+        ReportLine('Desde', dateSpanish(monday)),
+        ReportLine('Hasta', dateSpanish(sunday)),
+        ReportLine('Responsabilidad', 'Desayuno, almuerzo y cena'),
+        ReportLine('Calendario', week['configured'] == true
+            ? 'Confirmado' : 'Provisional; sujeto a confirmación'),
+      ],
+      generatedLabel: peruReportStamp(),
+      privacy: 'Para intercambios o cambios, consulta siempre la versión '
+          'más reciente en Familia Prado.',
+    ));
+  }
+
   @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
     future: data, builder: (context, snap) {
       if (!snap.hasData) return Center(child: snap.hasError
@@ -279,44 +337,46 @@ class _TurnsScreenState extends State<TurnsScreen> {
               ])),
             const SizedBox(height: 14),
           ],
-          PradoSectionHeading('Calendario continuo',
-            subtitle: 'Consulta semanas anteriores o futuras.'),
-          Row(children: [
-            Expanded(child: OutlinedButton.icon(
-              onPressed: submitting ? null : () => _changePage(-1),
-              icon: const Icon(Icons.chevron_left), label: const Text('Anterior'))),
-            const SizedBox(width: 8),
-            Expanded(child: OutlinedButton.icon(
-              onPressed: submitting ? null : () => _changePage(1),
-              icon: const Icon(Icons.chevron_right), label: const Text('Siguiente'))),
-          ]),
-          const SizedBox(height: 12),
-          SizedBox(height: 82, child: ListView.separated(
-            scrollDirection: Axis.horizontal, itemCount: weeks.length,
-            separatorBuilder: (context, index) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final week = weeks[index];
-              final chosen = selected == index;
-              return InkWell(onTap: submitting ? null : () {
-                setState(() => selected = index);
-                fetchChecks(week['monday'] as String);
-              }, borderRadius: BorderRadius.circular(17),
-                child: Container(width: 126, padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: chosen ? PradoColors.navy : PradoColors.paper,
-                    border: Border.all(color: chosen ? PradoColors.navy : PradoColors.line),
-                    borderRadius: BorderRadius.circular(17)),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Text('${dateSpanish(parseDate(week['monday'] as String))}',
-                      style: TextStyle(fontSize: 13,
-                        color: chosen ? Colors.white70 : PradoColors.muted)),
-                    const SizedBox(height: 5),
-                    Text('${week['memberName']}',
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
-                        color: chosen ? Colors.white : PradoColors.navy)),
-                  ])));
-            })),
+          PradoSectionHeading('Calendario de responsables',
+            subtitle: 'Consulta el mes sin desplazarte entre semanas.'),
+          PradoPanel(tint: PradoColors.cream, child: Column(children: [
+            Row(children: [
+              IconButton(tooltip: 'Mes anterior', onPressed: submitting ? null : () => _changeMonth(-1),
+                icon: const Icon(Icons.chevron_left)),
+              Expanded(child: Text(_monthTitle, textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium)),
+              IconButton(tooltip: 'Mes siguiente', onPressed: submitting ? null : () => _changeMonth(1),
+                icon: const Icon(Icons.chevron_right)),
+              TextButton(onPressed: submitting ? null : _goToday, child: const Text('Hoy')),
+            ]),
+            const SizedBox(height: 8),
+            for (var i = 0; i < weeks.length; i++)
+              if (_overlapsMonth(weeks[i]['monday'] as String))
+                Padding(padding: const EdgeInsets.only(bottom: 7),
+                  child: Material(color: selected == i ? PradoColors.paleBlue : Colors.white,
+                    borderRadius: BorderRadius.circular(15),
+                    child: InkWell(borderRadius: BorderRadius.circular(15),
+                      onTap: submitting ? null : () => _chooseWeek(i, weeks[i]['monday'] as String),
+                      child: Padding(padding: const EdgeInsets.all(13), child: Row(children: [
+                        Icon(selected == i ? Icons.event_available : Icons.calendar_month_outlined,
+                          color: PradoColors.ocean, size: 23),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                          Text(_weekTitle(weeks[i]['monday'] as String),
+                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 3),
+                          Text('${weeks[i]['memberName']}',
+                            style: const TextStyle(fontSize: 16)),
+                        ])),
+                        if (selected == i) const Icon(Icons.check_circle, color: PradoColors.teal),
+                        const Icon(Icons.chevron_right, color: PradoColors.muted),
+                      ]))))),
+            if (weeks.any((w) => w['configured'] != true))
+              const Padding(padding: EdgeInsets.only(top: 8),
+                child: Text('Orden provisional pendiente de confirmación.',
+                  style: TextStyle(color: PradoColors.coral))),
+          ])),
           const SizedBox(height: 16),
           PradoPanel(tint: PradoColors.paleBlue,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -344,6 +404,10 @@ class _TurnsScreenState extends State<TurnsScreen> {
                   icon: const Icon(Icons.swap_horiz), label: const Text('Solicitar intercambio')),
               ],
             ])),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(onPressed: () => _shareWeek(current),
+            icon: const Icon(Icons.ios_share_outlined),
+            label: const Text('Compartir esta semana en imagen')),
           const SizedBox(height: 16),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Ver semana como', style: Theme.of(context).textTheme.titleMedium),

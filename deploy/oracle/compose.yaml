@@ -1,0 +1,34 @@
+# Ejecutar desde deploy/oracle. PostgreSQL alojado fuera, en Neon.
+services:
+  api:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SPRING_PROFILES_ACTIVE: staging
+      CARE_DOCUMENTS_ENABLED: 'false'
+      FIREBASE_SERVICE_ACCOUNT_FILE: /run/secrets/firebase-admin.json
+    volumes:
+      - ./secrets/firebase-admin.json:/run/secrets/firebase-admin.json:ro
+    expose:
+      - '8080'
+    networks: [prado]
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    networks: [prado]
+networks:
+  prado:
+volumes:
+  caddy_data:
+  caddy_config:
