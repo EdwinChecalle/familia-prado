@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../core/family_alerts.dart';
+import '../core/local_reminders.dart';
 
 class AlertsScreen extends StatelessWidget {
-  const AlertsScreen({super.key, required this.alerts});
+  const AlertsScreen({super.key, required this.alerts, required this.reminders});
   final FamilyAlerts alerts;
+  final FamilyLocalReminders reminders;
 
   IconData _icon(String category) => switch (category) {
     'TURN' => Icons.restaurant_outlined,
@@ -24,6 +26,28 @@ class AlertsScreen extends StatelessWidget {
             value: alerts.voiceEnabled,
             onChanged: alerts.setVoiceEnabled,
             secondary: const Icon(Icons.record_voice_over_outlined),
+          )),
+          const SizedBox(height: 12),
+          AnimatedBuilder(animation: reminders, builder:(context, _) => Card(
+            child: Column(children: [
+              SwitchListTile.adaptive(
+                title:const Text('Notificaciones del sistema (app cerrada)'),
+                subtitle:const Text('Optativo. Programa turnos y citas ya conocidos; '
+                  'sin nombres de medicamentos ni datos clínicos.'),
+                secondary:const Icon(Icons.notifications_outlined),
+                value:reminders.enabled,
+                onChanged:reminders.ready ? (value) async {
+                  await reminders.setEnabled(value);
+                  if (context.mounted && reminders.error != null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content:Text(reminders.error!)));
+                  }
+                } : null,
+              ),
+              if (reminders.enabled) TextButton.icon(
+                onPressed:reminders.reschedule,
+                icon:const Icon(Icons.sync),label:const Text('Actualizar recordatorios del sistema')),
+            ]),
           )),
           const SizedBox(height: 12),
           if (alerts.error != null) Text(alerts.error!),
@@ -72,7 +96,7 @@ class AlertsScreen extends StatelessWidget {
               ],
             ))),
           const SizedBox(height: 12),
-          const Text('Los avisos con audio no mencionan diagnósticos ni medicamentos. Las notificaciones con la app cerrada se incorporarán al configurar FCM y APNs.'),
+          const Text('Los avisos locales programados pueden aparecer con la app cerrada, según permisos del sistema. Avisos NUEVOS cuando la app está cerrada requieren FCM/APNs y todavía no están habilitados.'),
         ],
       ));
     }),

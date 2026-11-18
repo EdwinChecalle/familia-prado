@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -45,6 +46,43 @@ class FamilyApi {
     }
     _token = null;
     await _secure.delete(key: 'session_token');
+  }
+
+  Future<dynamic> uploadCareDocument(String title, String category, String filename,
+      Uint8List bytes) async {
+    if (bytes.isEmpty || bytes.length > 5 * 1024 * 1024) {
+      throw ApiException('El documento debe tener entre 1 byte y 5 MB', 400);
+    }
+    final uri = Uri.parse('$apiBase/api/care/documents');
+    if (kReleaseMode && uri.scheme != 'https') throw ApiException('Se requiere HTTPS', 0);
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $_token'
+      ..fields['title'] = title
+      ..fields['category'] = category
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 40));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 400) {
+        throw ApiException('No se pudo guardar el documento (${response.statusCode})', response.statusCode);
+      }
+      return jsonDecode(response.body);
+    } on ApiException { rethrow; }
+    catch (_) { throw ApiException('Error al cargar el documento privado', 0); }
+  }
+
+  Future<Uint8List> downloadCareDocument(String id) async {
+    final uri = Uri.parse('$apiBase/api/care/documents/$id/download');
+    if (kReleaseMode && uri.scheme != 'https') throw ApiException('Se requiere HTTPS', 0);
+    try {
+      final response = await http.get(uri,
+        headers: {'Authorization': 'Bearer $_token'}).timeout(const Duration(seconds: 40));
+      if (response.statusCode != 200) {
+        throw ApiException('No se pudo abrir el documento (${response.statusCode})', response.statusCode);
+      }
+      return response.bodyBytes;
+    } on ApiException { rethrow; }
+    catch (_) { throw ApiException('No se pudo obtener el documento', 0); }
   }
 
   Future<dynamic> get(String path) => _request('GET', path);

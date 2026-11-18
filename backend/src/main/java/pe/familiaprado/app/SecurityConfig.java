@@ -1,5 +1,6 @@
 package pe.familiaprado.app;
 
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -17,6 +18,7 @@ public class SecurityConfig {
         return http.csrf(csrf -> csrf.disable())
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(HttpMethod.OPTIONS, "/**").denyAll()
                 .requestMatchers("/api/ping", "/api/auth/login", "/actuator/health").permitAll()
                 .anyRequest().authenticated())

@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import '../core/api.dart';
 import '../core/live_updates.dart';
 import '../core/family_alerts.dart';
+import '../core/local_reminders.dart';
 import 'alerts_screen.dart';
 import 'home_screen.dart';
 import 'turns_screen.dart';
 import 'fund_screen.dart';
 import 'appointments_screen.dart';
 import 'members_screen.dart';
+import 'care_screen.dart';
 
 class ShellScreen extends StatefulWidget {
   const ShellScreen({super.key, required this.api, required this.onLogout});
@@ -22,6 +26,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
   String role = '';
   late final LiveUpdates live;
   late final FamilyAlerts alerts;
+  late final FamilyLocalReminders reminders;
   final titles = const ['Inicio', 'Semanas de comida', 'Aportes y gastos', 'Citas médicas', 'Familia'];
 
   @override void initState() {
@@ -29,9 +34,11 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     live = LiveUpdates(widget.api);
     alerts = FamilyAlerts(widget.api);
+    reminders = FamilyLocalReminders(widget.api);
     live.addListener(_onLive);
     live.start();
     alerts.start();
+    reminders.start();
     _loadProfile();
   }
 
@@ -45,19 +52,29 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     } catch (_) { /* Navigation remains usable if profile cannot load. */ }
   }
 
-  void _onLive() { alerts.refresh(); }
+  void _onLive() {
+    alerts.refresh();
+    if (const {'turns','appointments','all'}.contains(live.lastTopic)) {
+      reminders.reschedule();
+    }
+  }
   @override void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       live.start();
       alerts.foreground(true);
+      reminders.reschedule();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
       live.pause();
       alerts.foreground(false);
     }
   }
 
+  void _openCare() => Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => CareScreen(api: widget.api),
+  ));
+
   void _openAlerts() => Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (_) => AlertsScreen(alerts: alerts),
+    builder: (_) => AlertsScreen(alerts: alerts, reminders: reminders),
   ));
 
   @override void dispose() {
@@ -65,6 +82,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     live.removeListener(_onLive);
     live.dispose();
     alerts.dispose();
+    reminders.dispose();
     super.dispose();
   }
 
@@ -72,7 +90,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     final screens = [
       HomeScreen(api: widget.api, displayName: displayName, role: role,
         onNavigate: (index) => setState(() => tab = index),
-        onAlerts: _openAlerts, alerts: alerts, updates: live),
+        onAlerts: _openAlerts, onCare: _openCare, alerts: alerts, updates: live),
       TurnsScreen(api: widget.api, updates: live),
       FundScreen(api: widget.api, updates: live),
       AppointmentsScreen(api: widget.api, updates: live),
@@ -87,6 +105,8 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
               maxLines: 1, overflow: TextOverflow.ellipsis),
           ]),
         actions: [
+          IconButton(tooltip: 'Cuidado de Papá Isidro',icon: const Icon(Icons.medical_services_outlined),
+              onPressed: _openCare),
           AnimatedBuilder(animation: alerts, builder: (context, _) => Badge(
             isLabelVisible: alerts.unreadCount > 0,
             label: Text('${alerts.unreadCount}'),
@@ -94,6 +114,16 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
               onPressed: _openAlerts),
           )),
           IconButton(tooltip: 'Salir de mi cuenta', icon: const Icon(Icons.logout), onPressed: () async {
+            await reminders.clearForLogout();
+            // App-private temporary document copies must not survive account switch.
+            try {
+              final dir = await getTemporaryDirectory();
+              for (final file in dir.listSync()) {
+                if (file is File && file.uri.pathSegments.last.startsWith('prado-')) {
+                  await file.delete();
+                }
+              }
+            } catch (_) { /* OS may own cache; don't block logout. */ }
             await widget.api.logout();
             if (mounted) widget.onLogout();
           }),
