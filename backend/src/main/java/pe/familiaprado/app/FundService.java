@@ -13,7 +13,8 @@ import org.springframework.web.server.ResponseStatusException;
 public class FundService {
     private final JdbcTemplate db;
     private final ChangeFeed feed;
-    public FundService(JdbcTemplate db,ChangeFeed feed){this.db=db;this.feed=feed;}
+    private final PushQueue push;
+    public FundService(JdbcTemplate db,ChangeFeed feed,PushQueue push){this.db=db;this.feed=feed;this.push=push;}
     public record Collection(UUID id,String concept,BigDecimal amountPerMember,LocalDate dueDate) {}
     public record Payment(UUID id,UUID collectionId,UUID memberId,BigDecimal amount,String method,String reference,String status) {}
     public record Expense(UUID id,String concept,BigDecimal amount,String receiptReference,String status,String registeredBy,String reviewedBy) {}
@@ -38,6 +39,7 @@ public class FundService {
         UUID id=UUID.randomUUID();
         db.update("INSERT INTO collections(id,concept,amount_per_member,due_date,created_by) VALUES(?,?,?,?,?)",
           id,concept.strip(),amount,due==null?null:java.sql.Date.valueOf(due),Session.current().userId());
+        push.collectionCreated(id);
         feed.changed("fund");
         return id;
     }

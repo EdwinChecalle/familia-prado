@@ -5,6 +5,7 @@ import '../core/api.dart';
 import '../core/live_updates.dart';
 import '../core/family_alerts.dart';
 import '../core/local_reminders.dart';
+import '../core/push_notifications.dart';
 import 'alerts_screen.dart';
 import 'home_screen.dart';
 import 'turns_screen.dart';
@@ -27,6 +28,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
   late final LiveUpdates live;
   late final FamilyAlerts alerts;
   late final FamilyLocalReminders reminders;
+  late final FamilyPushNotifications push;
   final titles = const ['Inicio', 'Semanas de comida', 'Aportes y gastos', 'Citas médicas', 'Familia'];
 
   @override void initState() {
@@ -34,11 +36,13 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     live = LiveUpdates(widget.api);
     alerts = FamilyAlerts(widget.api);
-    reminders = FamilyLocalReminders(widget.api);
+    reminders = FamilyLocalReminders(widget.api, onOpenRoute: _onNotificationRoute);
+    push = FamilyPushNotifications(widget.api, reminders,
+      onOpenRoute: _onNotificationRoute, onNewMessage: _onPushMessage);
     live.addListener(_onLive);
     live.start();
     alerts.start();
-    reminders.start();
+    reminders.start().then((_) => push.start());
     _loadProfile();
   }
 
@@ -50,6 +54,22 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
         role = profile['role'] as String? ?? '';
       });
     } catch (_) { /* Navigation remains usable if profile cannot load. */ }
+  }
+
+  void _onNotificationRoute(String route) {
+    if (!mounted) return;
+    switch (route) {
+      case 'citas': setState(() => tab = 3); break;
+      case 'comidas': setState(() => tab = 1); break;
+      case 'caja': setState(() => tab = 2); break;
+      case 'avisos': _openAlerts(); break;
+    }
+  }
+
+  void _onPushMessage() {
+    if (!mounted) return;
+    alerts.refresh();
+    reminders.reschedule();
   }
 
   void _onLive() {
@@ -74,7 +94,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
   ));
 
   void _openAlerts() => Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (_) => AlertsScreen(alerts: alerts, reminders: reminders),
+    builder: (_) => AlertsScreen(alerts: alerts, reminders: reminders, push: push),
   ));
 
   @override void dispose() {
@@ -83,6 +103,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     live.dispose();
     alerts.dispose();
     reminders.dispose();
+    push.dispose();
     super.dispose();
   }
 
@@ -114,6 +135,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
               onPressed: _openAlerts),
           )),
           IconButton(tooltip: 'Salir de mi cuenta', icon: const Icon(Icons.logout), onPressed: () async {
+            await push.clearForLogout();
             await reminders.clearForLogout();
             // App-private temporary document copies must not survive account switch.
             try {

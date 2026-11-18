@@ -1,0 +1,41 @@
+--- a/mobile/lib/core/push_notifications.dart
++++ b/mobile/lib/core/push_notifications.dart
+@@ -3,6 +3,7 @@
+ import 'package:firebase_messaging/firebase_messaging.dart';
+ import 'package:flutter/foundation.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
++import '../firebase_options.dart';
+ import 'api.dart';
+ import 'local_reminders.dart';
+ 
+@@ -17,14 +18,10 @@
+   final void Function(String route)? onOpenRoute;
+   final VoidCallback? onNewMessage;
+ 
+-  static const _apiKey = String.fromEnvironment('PRADO_FIREBASE_API_KEY');
+-  static const _appId = String.fromEnvironment('PRADO_FIREBASE_APP_ID');
+-  static const _sender = String.fromEnvironment('PRADO_FIREBASE_SENDER_ID');
+-  static const _project = String.fromEnvironment('PRADO_FIREBASE_PROJECT_ID');
+-  static const _iosBundle = String.fromEnvironment('PRADO_FIREBASE_IOS_BUNDLE_ID');
+-
+-  bool get configured => _apiKey.isNotEmpty && _appId.isNotEmpty &&
+-      _sender.isNotEmpty && _project.isNotEmpty;
++  // FlutterFire generó firebase_options.dart para las plataformas vinculadas.
++  // Por ahora configuramos Android. Añadiremos iOS cuando se registre esa app.
++  bool get configured => !kIsWeb &&
++      defaultTargetPlatform == TargetPlatform.android;
+   bool enabled = false;
+   bool working = false;
+   String? error;
+@@ -53,10 +50,7 @@
+     if (!_disposed) notifyListeners();
+   }
+ 
+-  FirebaseOptions get _options => FirebaseOptions(
+-    apiKey: _apiKey, appId: _appId, messagingSenderId: _sender,
+-    projectId: _project, iosBundleId: _iosBundle.isEmpty ? null : _iosBundle,
+-  );
++  FirebaseOptions get _options => DefaultFirebaseOptions.currentPlatform;
+ 
+   Future<void> _activate({required bool requestPermission}) async {
+     if (!configured) throw StateError('Firebase todavía no está configurado.');

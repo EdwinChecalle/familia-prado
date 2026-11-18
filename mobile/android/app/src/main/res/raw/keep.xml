@@ -1,0 +1,2 @@
+<resources xmlns:tools="http://schemas.android.com/tools"
+           tools:keep="@raw/prado_cita,@raw/prado_turno,@raw/prado_colecta,@raw/prado_aviso" />

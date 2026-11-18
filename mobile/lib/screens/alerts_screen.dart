@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import '../core/family_alerts.dart';
 import '../core/local_reminders.dart';
+import '../core/push_notifications.dart';
 
 class AlertsScreen extends StatelessWidget {
-  const AlertsScreen({super.key, required this.alerts, required this.reminders});
+  const AlertsScreen({super.key, required this.alerts, required this.reminders, required this.push});
   final FamilyAlerts alerts;
   final FamilyLocalReminders reminders;
+  final FamilyPushNotifications push;
 
   IconData _icon(String category) => switch (category) {
     'TURN' => Icons.restaurant_outlined,
@@ -44,9 +46,65 @@ class AlertsScreen extends StatelessWidget {
                   }
                 } : null,
               ),
+              if (reminders.ready) SwitchListTile.adaptive(
+                title: const Text('Audio hablado con la app cerrada'),
+                subtitle: const Text('Opcional: frase breve grabada. Se respeta el modo silencio del celular. No lee datos clínicos.'),
+                value: reminders.spokenSound,
+                onChanged: (value) async {
+                  await reminders.setSpokenSound(value);
+                  await push.syncVoicePreference();
+                },
+                secondary: const Icon(Icons.volume_up_outlined),
+              ),
+              if (reminders.ready) ListTile(
+                title: const Text('Recordatorios preparados'),
+                subtitle: Text('${reminders.pendingCount} pendientes'
+                  '${reminders.nextReminder == null ? '' : ' · Próximo: ${reminders.nextReminder!.toLocal()}'}'),
+              ),
               if (reminders.enabled) TextButton.icon(
-                onPressed:reminders.reschedule,
-                icon:const Icon(Icons.sync),label:const Text('Actualizar recordatorios del sistema')),
+                onPressed: reminders.reschedule,
+                icon: const Icon(Icons.sync), label: const Text('Actualizar recordatorios del sistema')),
+              TextButton.icon(
+                onPressed: () async {
+                  try {
+                    await reminders.testNotification();
+                  } catch (e) {
+                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('$e')));
+                  }
+                },
+                icon: const Icon(Icons.notification_add_outlined),
+                label: const Text('Probar notificación del teléfono'),
+              ),
+              if (reminders.error != null) Padding(
+                padding: const EdgeInsets.all(12), child: Text(reminders.error!)),
+            ]),
+          )),
+          const SizedBox(height: 12),
+          AnimatedBuilder(animation: push, builder: (context, _) => Card(
+            child: Column(children: [
+              SwitchListTile.adaptive(
+                title: const Text('Avisos nuevos con la app cerrada (Firebase)'),
+                subtitle: Text(push.configured
+                  ? 'Recibe avisos del servidor de citas nuevas, colectas y cambios.'
+                  : 'Falta vincular Firebase. Los avisos ya programados siguen disponibles.'),
+                value: push.enabled,
+                onChanged: push.configured && !push.working ? push.setEnabled : null,
+                secondary: const Icon(Icons.cloud_outlined),
+              ),
+              if (push.enabled) TextButton.icon(
+                onPressed: () async {
+                  try { await push.testPush(); }
+                  catch (e) {
+                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('$e')));
+                  }
+                },
+                icon: const Icon(Icons.send_outlined),
+                label: const Text('Enviar prueba desde Spring Boot'),
+              ),
+              if (push.error != null) Padding(
+                padding: const EdgeInsets.all(12), child: Text(push.error!)),
             ]),
           )),
           const SizedBox(height: 12),
@@ -96,7 +154,7 @@ class AlertsScreen extends StatelessWidget {
               ],
             ))),
           const SizedBox(height: 12),
-          const Text('Los avisos locales programados pueden aparecer con la app cerrada, según permisos del sistema. Avisos NUEVOS cuando la app está cerrada requieren FCM/APNs y todavía no están habilitados.'),
+          const Text('Los recordatorios guardados funcionan como avisos locales. Los avisos nuevos con la app cerrada necesitan Firebase configurado, permisos y conexión a internet.'),
         ],
       ));
     }),

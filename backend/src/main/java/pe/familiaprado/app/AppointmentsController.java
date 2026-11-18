@@ -3,6 +3,7 @@ package pe.familiaprado.app;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -12,7 +13,8 @@ import org.springframework.web.server.ResponseStatusException;
 public class AppointmentsController {
     private final JdbcTemplate db;
     private final ChangeFeed feed;
-    public AppointmentsController(JdbcTemplate db,ChangeFeed feed){this.db=db;this.feed=feed;}
+    private final PushQueue push;
+    public AppointmentsController(JdbcTemplate db,ChangeFeed feed,PushQueue push){this.db=db;this.feed=feed;this.push=push;}
     public record Appointment(UUID id,Instant appointmentAt,String hospital,String specialty,
                               UUID responsibleMemberId,String status,String preparation) {}
     @GetMapping public List<Appointment> list(@RequestParam(required=false) Instant after){
@@ -27,7 +29,7 @@ public class AppointmentsController {
     }
     public record NewAppointment(Instant appointmentAt,String hospital,String specialty,
                                  UUID responsibleMemberId,String preparation) {}
-    @PostMapping @ResponseStatus(HttpStatus.CREATED)
+    @Transactional @PostMapping @ResponseStatus(HttpStatus.CREATED)
     public Map<String,UUID> create(@RequestBody NewAppointment r){
         Session.current().adminOnly();
         if(r.appointmentAt()==null||r.hospital()==null||r.hospital().isBlank()||r.hospital().length()>160||
@@ -40,11 +42,12 @@ public class AppointmentsController {
           VALUES(?,?,?,?,?,'PLANNED',?,?)
           """,id,java.sql.Timestamp.from(r.appointmentAt()),r.hospital().strip(),r.specialty().strip(),
             r.responsibleMemberId(),r.preparation(),Session.current().userId());
+        push.appointmentCreated(id,r.responsibleMemberId(),r.appointmentAt());
         feed.changed("appointments");
         return Map.of("id",id);
     }
     public record ChangeStatus(String status) {}
-    @PatchMapping("/{id}/status") @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Transactional @PatchMapping("/{id}/status") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void status(@PathVariable UUID id,@RequestBody ChangeStatus r){
         var rows=db.query("SELECT responsible_member_id,status FROM appointments WHERE id=?",
           (rs,n)->Map.entry(Optional.ofNullable(rs.getObject(1,UUID.class)),rs.getString(2)),id);
@@ -58,6 +61,7 @@ public class AppointmentsController {
         if(List.of("COMPLETED","CANCELLED").contains(rows.getFirst().getValue()))
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Cita cerrada");
         db.update("UPDATE appointments SET status=? WHERE id=?",r.status(),id);
+        push.appointmentStatusChanged(id,rows.getFirst().getKey().orElse(null),r.status());
         feed.changed("appointments");
     }
 }
