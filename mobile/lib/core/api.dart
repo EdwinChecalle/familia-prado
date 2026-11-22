@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -21,7 +22,22 @@ class FamilyApi {
   FamilyApi();
   final _secure = const FlutterSecureStorage();
   String? _token;
+  final Map<String,String> _pendingWriteKeys = {};
   String? get token => _token;
+
+  bool _needsIdempotency(String path) =>
+      path == '/api/appointments' || path == '/api/fund/collections' ||
+      path == '/api/fund/expenses' || path == '/api/swaps' ||
+      RegExp(r'^/api/fund/collections/[^/]+/contributions$').hasMatch(path);
+
+  String _newRequestKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex=bytes.map((v) => v.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-${hex.substring(16,20)}-${hex.substring(20)}';
+  }
 
   Future<bool> restore() async {
     _token = await _secure.read(key: 'session_token');
@@ -51,6 +67,7 @@ class FamilyApi {
     if (!localOnly && _token != null) {
       try { await post('/api/auth/logout', {}); } catch (_) { /* revoke is best effort */ }
     }
+    _pendingWriteKeys.clear();
     _token = null;
     await _secure.delete(key: 'session_token');
   }
@@ -109,6 +126,12 @@ class FamilyApi {
     }
     final headers = <String, String>{'Content-Type': 'application/json', 'Accept': 'application/json'};
     if (authenticated && _token != null) headers['Authorization'] = 'Bearer $_token';
+    String? writeFingerprint;
+    if (method == 'POST' && authenticated && _needsIdempotency(path)) {
+      writeFingerprint = '$path|${jsonEncode(data)}';
+      headers['Idempotency-Key'] = _pendingWriteKeys.putIfAbsent(
+        writeFingerprint, _newRequestKey);
+    }
     late http.Response response;
     try {
       response = await (switch (method) {
@@ -129,9 +152,13 @@ class FamilyApi {
     try { decoded = response.body.isEmpty ? null : jsonDecode(response.body); }
     catch (_) { decoded = null; }
     if (response.statusCode >= 400) {
+      if (writeFingerprint != null && response.statusCode < 500) {
+        _pendingWriteKeys.remove(writeFingerprint);
+      }
       final message = decoded is Map ? (decoded['error'] ?? decoded['detail'] ?? 'Error del servidor') : 'Error del servidor';
       throw ApiException('$message', response.statusCode);
     }
+    if (writeFingerprint != null) _pendingWriteKeys.remove(writeFingerprint);
     return decoded;
   }
 }

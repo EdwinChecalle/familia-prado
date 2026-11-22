@@ -11,7 +11,17 @@ class MembersScreen extends StatefulWidget {
 class _MembersScreenState extends State<MembersScreen> {
   late Future<List<dynamic>> data;
   @override void initState(){super.initState();refresh();}
-  void refresh(){data=Future.wait([widget.api.get('/api/members'),widget.api.get('/api/auth/me')]);}
+  void refresh(){
+    data=() async {
+      final results=await Future.wait<dynamic>([
+        widget.api.get('/api/members'),widget.api.get('/api/auth/me'),
+      ]);
+      final me=results[1] as Map<String,dynamic>;
+      results.add(me['role']=='ADMIN'
+        ? await widget.api.get('/api/admin/accounts') : <dynamic>[]);
+      return results;
+    }();
+  }
   void reload(){setState(refresh);}
   void notice(Object m){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$m')));}
   Future<void> createAccount(Map<String,dynamic> member)async{
@@ -23,7 +33,7 @@ class _MembersScreenState extends State<MembersScreen> {
           TextField(controller:email,keyboardType:TextInputType.emailAddress,
             decoration:const InputDecoration(labelText:'Correo electrónico')),
           const SizedBox(height:12),TextField(controller:password,obscureText:true,
-            decoration:const InputDecoration(labelText:'Contraseña inicial (mínimo 12 caracteres)')),
+            decoration:const InputDecoration(labelText:'Contraseña inicial (mínimo 8 caracteres)')),
           const SizedBox(height:10),const Text('Comunica la contraseña por un medio privado y solicita que la cambien. No compartas claves en el grupo familiar.'),
         ]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancelar')),
           FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Crear cuenta'))]));
@@ -32,6 +42,30 @@ class _MembersScreenState extends State<MembersScreen> {
       });reload();notice('Cuenta creada. Entrega el acceso a la persona correspondiente.');}
     }catch(e){notice(e);}finally{email.dispose();password.dispose();}
   }
+  Future<void> resetMemberAccess(Map<String,dynamic> member, Map<String,dynamic> account) async {
+    final password=TextEditingController();
+    try {
+      final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+        title:Text('Restablecer acceso de ${member['name']}'),
+        content:Column(mainAxisSize:MainAxisSize.min,children:[
+          Text('Cuenta: ${account['email']}'),
+          const SizedBox(height:12),
+          TextField(controller:password,obscureText:true,
+            decoration:const InputDecoration(labelText:'Nueva contraseña (mínimo 8 caracteres)')),
+          const SizedBox(height:10),
+          const Text('Se cerrarán todas sus sesiones anteriores. Entrega la nueva clave únicamente a esa persona.'),
+        ]),
+        actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancelar')),
+          FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Restablecer'))],
+      ));
+      if(accepted==true){
+        await widget.api.post('/api/admin/accounts/${account['id']}/reset-password',{
+          'newPassword':password.text,
+        });
+        notice('Acceso restablecido; las sesiones anteriores quedaron revocadas.');
+      }
+    }catch(e){notice(e);}finally{password.dispose();}
+  }
   Future<void> changePassword()async{
     final old=TextEditingController(),newPass=TextEditingController();
     try{
@@ -39,7 +73,7 @@ class _MembersScreenState extends State<MembersScreen> {
         title:const Text('Cambiar mi contraseña'),content:Column(mainAxisSize:MainAxisSize.min,children:[
           TextField(controller:old,obscureText:true,decoration:const InputDecoration(labelText:'Contraseña actual')),
           const SizedBox(height:10),TextField(controller:newPass,obscureText:true,
-            decoration:const InputDecoration(labelText:'Nueva contraseña (12 caracteres o más)')),
+            decoration:const InputDecoration(labelText:'Nueva contraseña (mínimo 8 caracteres)')),
         ]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancelar')),
           FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Cambiar contraseña'))]));
       if(confirm==true){await widget.api.post('/api/auth/change-password',{
@@ -54,6 +88,7 @@ class _MembersScreenState extends State<MembersScreen> {
         : const CircularProgressIndicator());
       final members = snap.data![0] as List;
       final me = snap.data![1] as Map<String, dynamic>;
+      final accounts = (snap.data![2] as List).cast<Map<String,dynamic>>();
       final ordered = [...members]..sort((a, b) =>
         ((a['position'] as num?)?.toInt() ?? 0).compareTo(
           (b['position'] as num?)?.toInt() ?? 0));
@@ -107,11 +142,24 @@ class _MembersScreenState extends State<MembersScreen> {
                     Text('Turno ${(ordered[i]['position'] ?? i+1)} en la rotación',
                       style: const TextStyle(color: PradoColors.muted, fontSize: 14)),
                   ])),
-                if (me['role'] == 'ADMIN') IconButton(
-                  tooltip: 'Crear una cuenta para ${ordered[i]['name']}',
-                  icon: const Icon(Icons.person_add_alt_1_outlined,
-                    color: PradoColors.ocean),
-                  onPressed: () => createAccount(Map<String, dynamic>.from(ordered[i] as Map)))
+                if (me['role'] == 'ADMIN') Builder(builder: (context) {
+                  final member = Map<String,dynamic>.from(ordered[i] as Map);
+                  Map<String,dynamic>? account;
+                  for (final candidate in accounts) {
+                    if (candidate['memberId']==member['id']) { account=candidate; break; }
+                  }
+                  if (account == null) return IconButton(
+                    tooltip: 'Crear una cuenta para ${member['name']}',
+                    icon: const Icon(Icons.person_add_alt_1_outlined,
+                      color: PradoColors.ocean),
+                    onPressed: () => createAccount(member));
+                  final current=account;
+                  return IconButton(
+                    tooltip: 'Restablecer acceso de ${member['name']}',
+                    icon: const Icon(Icons.lock_reset_outlined,
+                      color: PradoColors.ocean),
+                    onPressed: () => resetMemberAccess(member,current));
+                })
                 else const Icon(Icons.favorite_outline, color: PradoColors.coral),
               ]))),
           const SizedBox(height: 16),

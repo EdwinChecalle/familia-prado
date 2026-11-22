@@ -60,8 +60,8 @@ public class AuthService {
     @Transactional
     public void changePassword(String previous,String next) {
         Session user=Session.current();
-        if (next==null || next.length()<12 || next.length()>100)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"La nueva contraseña debe tener 12 a 100 caracteres");
+        if (next==null || next.length()<8 || next.length()>100)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"La nueva contraseña debe tener 8 a 100 caracteres");
         String original=db.queryForObject("SELECT password_hash FROM app_users WHERE id=?",String.class,user.userId());
         if (!passwordEncoder.matches(previous,original))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Contraseña actual incorrecta");
@@ -71,14 +71,39 @@ public class AuthService {
     @Transactional
     public UUID provision(String email,String password,UUID memberId) {
         Session.current().adminOnly();
-        if (password==null || password.length()<12 || password.length()>100)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Contraseña inicial de 12 a 100 caracteres");
+        if (password==null || password.length()<8 || password.length()>100)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Contraseña inicial de 8 a 100 caracteres");
         Integer count=db.queryForObject("SELECT COUNT(*) FROM family_members WHERE id=? AND active=true",Integer.class,memberId);
         if (count==null || count==0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Miembro no encontrado");
         UUID id=UUID.randomUUID();
         db.update("INSERT INTO app_users(id,email,password_hash,role,member_id) VALUES(?,?,?,'MEMBER',?)",
             id,norm(email),passwordEncoder.encode(password),memberId);
         return id;
+    }
+
+
+    /** Solo administración: consultar los accesos ya creados sin exponer hashes. */
+    public record FamilyAccount(UUID id, String email, UUID memberId) {}
+    public java.util.List<FamilyAccount> familyAccounts() {
+        Session.current().adminOnly();
+        return db.query("SELECT id,email,member_id FROM app_users WHERE role='MEMBER' ORDER BY created_at,id",
+            (r,n)->new FamilyAccount(r.getObject("id",UUID.class),r.getString("email"),
+                r.getObject("member_id",UUID.class)));
+    }
+
+    /** Restablecimiento asistido: invalida inmediatamente todos los tokens previos. */
+    @Transactional
+    public void resetMemberPassword(UUID target, String newPassword) {
+        Session.current().adminOnly();
+        if (newPassword==null || newPassword.length()<8 || newPassword.length()>100)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Contraseña de 8 a 100 caracteres");
+        var matches=db.query("SELECT id FROM app_users WHERE id=? AND role='MEMBER' FOR UPDATE",
+            (r,n)->r.getObject(1,UUID.class),target);
+        if (matches.isEmpty())
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Cuenta familiar no encontrada");
+        db.update("UPDATE app_users SET password_hash=? WHERE id=?",
+            passwordEncoder.encode(newPassword),target);
+        db.update("UPDATE login_tokens SET revoked_at=NOW() WHERE user_id=? AND revoked_at IS NULL",target);
     }
 
     @Bean ApplicationRunner bootstrapAdmin(@Value("${BOOTSTRAP_ADMIN_EMAIL:}") String email,

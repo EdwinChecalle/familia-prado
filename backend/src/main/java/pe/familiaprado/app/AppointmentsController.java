@@ -15,7 +15,8 @@ public class AppointmentsController {
     private final JdbcTemplate db;
     private final ChangeFeed feed;
     private final PushQueue push;
-    public AppointmentsController(JdbcTemplate db,ChangeFeed feed,PushQueue push){this.db=db;this.feed=feed;this.push=push;}
+    private final IdempotencyService idem;
+    public AppointmentsController(JdbcTemplate db,ChangeFeed feed,PushQueue push,IdempotencyService idem){this.db=db;this.feed=feed;this.push=push;this.idem=idem;}
     public record Appointment(UUID id,Instant appointmentAt,String hospital,String specialty,
                               UUID responsibleMemberId,String status,String preparation) {}
     private static final String COLUMNS = "id,appointment_at,hospital,specialty,responsible_member_id,status,preparation";
@@ -93,12 +94,14 @@ public class AppointmentsController {
     public record NewAppointment(Instant appointmentAt,String hospital,String specialty,
                                  UUID responsibleMemberId,String preparation) {}
     @Transactional @PostMapping @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,UUID> create(@RequestBody NewAppointment r){
+    public Map<String,UUID> create(@RequestBody NewAppointment r,
+        @RequestHeader(value="Idempotency-Key",required=false) String key){
         Session.current().adminOnly();
         if(r.appointmentAt()==null||r.hospital()==null||r.hospital().isBlank()||r.hospital().length()>160||
           r.specialty()==null||r.specialty().isBlank()||r.specialty().length()>120||
           (r.preparation()!=null&&r.preparation().length()>500))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Revisa la fecha, hospital o especialidad");
+        return Map.of("id",idem.run(key,"appointments.create",r,()->{
         UUID id=UUID.randomUUID();
         db.update("""
           INSERT INTO appointments(id,appointment_at,hospital,specialty,responsible_member_id,status,preparation,created_by)
@@ -107,7 +110,8 @@ public class AppointmentsController {
             r.responsibleMemberId(),r.preparation(),Session.current().userId());
         push.appointmentCreated(id,r.responsibleMemberId(),r.appointmentAt());
         feed.changed("appointments");
-        return Map.of("id",id);
+        return id;
+        }));
     }
     public record ChangeStatus(String status) {}
     @Transactional @PatchMapping("/{id}/status") @ResponseStatus(HttpStatus.NO_CONTENT)

@@ -11,7 +11,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api")
 public class RotationController {
     private final RotationService s;
-    RotationController(RotationService s) { this.s=s; }
+    private final IdempotencyService idem;
+    RotationController(RotationService s, IdempotencyService idem) { this.s=s;this.idem=idem; }
     @GetMapping("/members") public List<RotationService.Member> members(){ return s.members(); }
     @GetMapping("/rotation") public RotationService.Config config(){ return s.config(); }
     public record SetRotation(LocalDate anchorMonday,List<UUID> memberIdsInOrder,UUID memberStarting) {}
@@ -32,8 +33,10 @@ public class RotationController {
     @GetMapping("/swaps") public List<RotationService.Swap> swaps(){ return s.swaps(); }
     public record NewSwap(LocalDate firstMonday,LocalDate secondMonday) {}
     @PostMapping("/swaps") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String,UUID> requestSwap(@RequestBody NewSwap r){
-        return Map.of("id",s.requestSwap(r.firstMonday(),r.secondMonday()));
+    public Map<String,UUID> requestSwap(@RequestBody NewSwap r,
+        @RequestHeader(value="Idempotency-Key",required=false) String key){
+        return Map.of("id",idem.run(key,"swaps.create",r,
+            ()->s.requestSwap(r.firstMonday(),r.secondMonday())));
     }
     public record Decision(boolean accept) {}
     @PostMapping("/swaps/{id}/decision") @ResponseStatus(HttpStatus.NO_CONTENT)

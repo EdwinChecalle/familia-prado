@@ -38,6 +38,12 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: const InputDecoration(labelText: 'Contraseña'), onSubmitted: (_) => submit()),
           if (error != null) Padding(padding: const EdgeInsets.only(top: 12),
             child: Text(error!, style: const TextStyle(color: Colors.red))),
+          const SizedBox(height: 12),
+          TextButton(onPressed: () => showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+            title:const Text('Recuperar acceso'),
+            content:const Text('Solicita al administrador familiar que restablezca tu contraseña desde Nuestra familia. Tu sesión anterior se cerrará.'),
+            actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Entendido'))],
+          )),child:const Text('¿Olvidaste tu contraseña?')),
           const SizedBox(height: 20),
           FilledButton(onPressed: saving ? null : submit, child: Padding(padding: const EdgeInsets.all(12),
             child: Text(saving ? 'Ingresando...' : 'Entrar', style: const TextStyle(fontSize: 18)))),

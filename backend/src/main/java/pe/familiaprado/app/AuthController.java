@@ -31,4 +31,12 @@ public class AuthController {
     public Map<String,UUID> provision(@Valid @RequestBody NewAccount r) {
         return Map.of("id",service.provision(r.email(),r.initialPassword(),r.memberId()));
     }
+
+    @GetMapping("/admin/accounts")
+    public java.util.List<AuthService.FamilyAccount> accounts() { return service.familyAccounts(); }
+    public record ResetPassword(@NotBlank String newPassword) {}
+    @PostMapping("/admin/accounts/{id}/reset-password") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resetPassword(@PathVariable UUID id, @Valid @RequestBody ResetPassword r) {
+        service.resetMemberPassword(id,r.newPassword());
+    }
 }
