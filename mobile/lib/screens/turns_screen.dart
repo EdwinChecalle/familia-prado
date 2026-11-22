@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/live_updates.dart';
@@ -24,6 +25,10 @@ class _TurnsScreenState extends State<TurnsScreen> {
   String? _checksError;
   bool _loadingChecks = false;
   int _checksRequestId = 0;
+  final Map<String, List<dynamic>> _weekCache = {};
+  // Evita que las notificaciones de la red disparen varias recargas simultáneas.
+  Timer? _pendingRefresh;
+
   @override void initState(){
     super.initState();
     final today = peruToday();
@@ -52,10 +57,15 @@ class _TurnsScreenState extends State<TurnsScreen> {
 
   void _onUpdate() {
     if (widget.updates.lastTopic == 'turns' || widget.updates.lastTopic == 'all') {
-      if (mounted && !submitting) setState(refresh);
+      if (!mounted || submitting) return;
+      _pendingRefresh?.cancel();
+      _pendingRefresh = Timer(const Duration(milliseconds: 350), () {
+        if (mounted && !submitting) setState(refresh);
+      });
     }
   }
   @override void dispose() {
+    _pendingRefresh?.cancel();
     widget.updates.removeListener(_onUpdate);
     super.dispose();
   }
@@ -78,17 +88,20 @@ class _TurnsScreenState extends State<TurnsScreen> {
   Future<void> fetchChecks(String monday) async {
     final requestId = ++_checksRequestId;
     if (!mounted) return;
+    final cached = _weekCache[monday];
     setState(() {
-      _loadedMonday = null;
+      _loadedMonday = cached == null ? null : monday;
+      checks = cached == null ? [] : List<dynamic>.from(cached);
       _loadingChecks = true;
       _checksError = null;
-      checks = [];
     });
     try {
-      final result = await widget.api.get('/api/turns/$monday/meals');
+      final result = List<dynamic>.from(
+          await widget.api.get('/api/turns/$monday/meals') as List);
       if (!mounted || requestId != _checksRequestId) return;
+      _weekCache[monday] = List<dynamic>.from(result);
       setState(() {
-        checks = List<dynamic>.from(result as List);
+        checks = result;
         _loadedMonday = monday;
         _loadingChecks = false;
       });
@@ -96,12 +109,15 @@ class _TurnsScreenState extends State<TurnsScreen> {
       if (!mounted || requestId != _checksRequestId) return;
       setState(() {
         _loadingChecks = false;
-        _checksError = 'No se pudieron cargar las comidas de esta semana.';
+        _checksError = cached == null
+            ? 'No pudimos cargar esta semana. Comprueba tu conexión.'
+            : 'Sin conexión. Mostramos la última consulta; no puedes editar hasta actualizar.';
       });
     }
   }
 
   void reload() {
+    _weekCache.clear();
     setState(() {
       checks = [];
       _loadedMonday = null;
@@ -116,8 +132,6 @@ class _TurnsScreenState extends State<TurnsScreen> {
     setState(() {
       visibleMonth = DateTime(visibleMonth.year, visibleMonth.month + direction);
       selected = 0;
-      checks = [];
-      _loadedMonday = null;
       refresh();
     });
   }
@@ -128,14 +142,15 @@ class _TurnsScreenState extends State<TurnsScreen> {
       visibleMonth = DateTime(today.year, today.month);
       final beginning = firstMonday(DateTime(today.year, today.month, 1));
       selected = firstMonday(today).difference(beginning).inDays ~/ 7;
-      checks = [];
-      _loadedMonday = null;
       refresh();
     });
   }
 
   void _chooseWeek(int index, String monday) {
     if (submitting) return;
+    // No volver a consultar si se selecciona la misma semana mientras carga.
+    if (selected == index && (_loadingChecks ||
+        (_loadedMonday == monday && _checksError == null))) return;
     setState(() => selected = index);
     fetchChecks(monday);
   }
@@ -186,11 +201,16 @@ class _TurnsScreenState extends State<TurnsScreen> {
       });
       // Reconciliar con PostgreSQL. Si falla esta consulta, no se revierte un PUT exitoso.
       try {
-        final server = await widget.api.get('/api/turns/$monday/meals');
+        final server = List<dynamic>.from(
+            await widget.api.get('/api/turns/$monday/meals') as List);
         if (mounted && _loadedMonday == monday) {
-          setState(() => checks = List<dynamic>.from(server as List));
+          _weekCache[monday] = List<dynamic>.from(server);
+          setState(() => checks = server);
         }
       } catch (_) {
+        // PUT completado: conservar el dato optimista, pero no considerarlo
+        // verificado ni reemplazar la copia de lectura hasta reconciliar.
+        _weekCache.remove(monday);
         notice('Comida guardada, pero no se pudo comprobar el estado actualizado.');
       }
     } catch (e) {
@@ -302,21 +322,44 @@ class _TurnsScreenState extends State<TurnsScreen> {
 
   @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
     future: data, builder: (context, snap) {
-      if (!snap.hasData) return Center(child: snap.hasError
-        ? Text('No se pudieron cargar los turnos: ${snap.error}')
-        : const CircularProgressIndicator());
+      if (!snap.hasData) {
+        return Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            if (!snap.hasError) ...[
+              const CircularProgressIndicator(),
+              const SizedBox(height: 18),
+              const Text('Conectando con Familia Prado...',
+                textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              const Text('Si el servidor gratuito estaba en reposo, la primera carga puede tardar.',
+                textAlign: TextAlign.center),
+            ] else ...[
+              const Icon(Icons.wifi_off_outlined, size: 36),
+              const SizedBox(height: 10),
+              const Text('No se pudo cargar Comidas.',
+                textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(onPressed: reload,
+                icon: const Icon(Icons.refresh), label: const Text('Reintentar')),
+            ],
+          ]),
+        ));
+      }
       final weeks = snap.data![0] as List;
       final members = snap.data![1] as List;
       final me = snap.data![2] as Map<String, dynamic>;
       final swaps = snap.data![3] as List;
       if (weeks.isEmpty) return const PradoEmpty(title: 'Sin turnos',
         detail: 'No se encontraron semanas disponibles.');
-      final current = weeks[selected] as Map<String, dynamic>;
+      final safeIndex = selected < weeks.length ? selected : weeks.length - 1;
+      final current = weeks[safeIndex] as Map<String, dynamic>;
       final monday = parseDate(current['monday'] as String);
       final completedMeals = _loadedMonday == current['monday']
         ? checks.where((x) => x['completed'] == true).length
         : ((current['completedMeals'] as num?)?.toInt() ?? 0);
-      final canEditChecks = _loadedMonday == current['monday'] && !_loadingChecks && !submitting;
+      final canEditChecks = _loadedMonday == current['monday'] &&
+          !_loadingChecks && !submitting && _checksError == null;
       final isResponsible = me['role'] == 'ADMIN' || me['memberId'] == current['memberId'];
       return RefreshIndicator(onRefresh: () async { reload(); await data; },
         child: ListView(padding: const EdgeInsets.all(16), children: [

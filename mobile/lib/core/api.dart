@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -28,9 +29,15 @@ class FamilyApi {
     try {
       await get('/api/auth/me');
       return true;
+    } on ApiException catch (error) {
+      if (error.status == 401) {
+        await logout(localOnly: true);
+        return false;
+      }
+      // No cerrar sesiÃ³n por fallos temporales de red o por Render en reposo.
+      return true;
     } catch (_) {
-      await logout(localOnly: true);
-      return false;
+      return true;
     }
   }
 
@@ -110,9 +117,12 @@ class FamilyApi {
         'PUT' => http.put(uri, headers: headers, body: jsonEncode(data)),
         'PATCH' => http.patch(uri, headers: headers, body: jsonEncode(data)),
         _ => throw ApiException('Método de red desconocido', 0),
-      }).timeout(const Duration(seconds: 18));
+      }).timeout(method == 'GET' ? const Duration(seconds: 140) : const Duration(seconds: 110));
     } catch (e) {
       if (e is ApiException) rethrow;
+      if (e is TimeoutException) {
+        throw ApiException('El servidor tarda en responder. Revisa tu conexiÃ³n y vuelve a intentar.', 0);
+      }
       throw ApiException('No se pudo conectar con el servidor. Revisa internet y la dirección configurada.', 0);
     }
     dynamic decoded;
