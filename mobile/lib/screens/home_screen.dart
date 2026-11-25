@@ -6,11 +6,12 @@ import '../ui/prado_design.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.api, required this.displayName,
-    required this.role, required this.onNavigate, required this.onAlerts,
+    required this.role, required this.onNavigate, required this.onAppointments, required this.onAlerts,
     required this.onCare, required this.alerts, required this.updates});
   final FamilyApi api;
   final String displayName, role;
   final ValueChanged<int> onNavigate;
+  final ValueChanged<String> onAppointments;
   final VoidCallback onAlerts, onCare;
   final FamilyAlerts alerts;
   final LiveUpdates updates;
@@ -36,6 +37,13 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.api.get('/api/appointments/summary'),
       widget.api.get('/api/members'),
     ]);
+  }
+
+  String _appointmentTime(String value) {
+    final clock = peruClock(value);
+    final hour = clock.hour % 12 == 0 ? 12 : clock.hour % 12;
+    final minute = clock.minute.toString().padLeft(2, '0');
+    return '$hour:$minute ${clock.hour < 12 ? 'a. m.' : 'p. m.'}';
   }
 
   Widget _accessCard({required String title, required String value,
@@ -74,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final next = appointments['next'];
       final nextDesc = next is Map ?
         '${dateSpanish(peruClock(next['appointmentAt'] as String))} · '
+        '${_appointmentTime(next['appointmentAt'] as String)} · '
         '${names[next['responsibleMemberId']] ?? 'Por asignar'}' :
         'Todavía no hay una cita futura programada';
       return ListView(padding: const EdgeInsets.all(16), children: [
@@ -116,7 +125,9 @@ class _HomeScreenState extends State<HomeScreen> {
           value: next is Map ? '${next['specialty']}' : 'Sin próximas citas',
           detail: nextDesc, tint: PradoColors.paleBlue,
           icon: Icons.calendar_month_outlined,
-          onTap: () => widget.onNavigate(3)),
+          onTap: () => widget.onAppointments(next is Map &&
+            isoDate(peruClock(next['appointmentAt'] as String)) == isoDate(peruToday())
+            ? 'TODAY' : 'UPCOMING')),
         const SizedBox(height: 12),
         _accessCard(title: 'Dinero disponible en caja',
           value: pradoMoney(fund['available']),

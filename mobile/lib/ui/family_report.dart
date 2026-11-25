@@ -18,6 +18,7 @@ class FamilyReport {
     required this.mainValue,
     required this.lines,
     required this.generatedLabel,
+    this.expanded = false,
     this.privacy = 'Comparte solo con personas de confianza.',
   });
   final String title;
@@ -27,6 +28,7 @@ class FamilyReport {
   final List<ReportLine> lines;
   final String generatedLabel;
   final String privacy;
+  final bool expanded;
 }
 
 class ReportLine {
@@ -39,12 +41,18 @@ class ReportLine {
 Future<void> showFamilyReport(BuildContext context, FamilyReport report) =>
     showDialog<void>(
       context: context,
-      builder: (context) => _ReportDialog(report: report),
+      builder: (context) => _ReportDialog(reports: [report]),
     );
 
+Future<void> showFamilyReportPages(BuildContext context, List<FamilyReport> reports) async {
+  if (reports.isEmpty) return;
+  await showDialog<void>(context: context, barrierDismissible: false,
+    builder: (_) => _ReportDialog(reports: reports));
+}
+
 class _ReportDialog extends StatefulWidget {
-  const _ReportDialog({required this.report});
-  final FamilyReport report;
+  const _ReportDialog({required this.reports});
+  final List<FamilyReport> reports;
 
   @override
   State<_ReportDialog> createState() => _ReportDialogState();
@@ -53,6 +61,10 @@ class _ReportDialog extends StatefulWidget {
 class _ReportDialogState extends State<_ReportDialog> {
   final _imageKey = GlobalKey();
   bool _busy = false;
+  int _page = 0;
+  FamilyReport get _report => widget.reports[_page];
+  final _scroll = ScrollController();
+  @override void dispose() { _scroll.dispose(); super.dispose(); }
 
   Future<File> _createPng({required bool permanent}) async {
     await WidgetsBinding.instance.endOfFrame;
@@ -67,8 +79,8 @@ class _ReportDialogState extends State<_ReportDialog> {
       final directory = permanent
           ? await getApplicationDocumentsDirectory()
           : await getTemporaryDirectory();
-      final filename = 'familia_prado_${DateTime.now().millisecondsSinceEpoch}.png';
-      return File('${directory.path}${Platform.pathSeparator}$filename')
+      final filename = 'familia_prado_${DateTime.now().microsecondsSinceEpoch}_${_page+1}.png';
+      return await File('${directory.path}${Platform.pathSeparator}$filename')
           .writeAsBytes(byteData.buffer.asUint8List(), flush: true);
     } finally {
       image.dispose();
@@ -79,11 +91,22 @@ class _ReportDialogState extends State<_ReportDialog> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final file = await _createPng(permanent: !share);
+      final original = _page;
+      final files = <File>[];
+      try {
+        for (var i = 0; i < widget.reports.length; i++) {
+          if (!mounted) return;
+          if (_scroll.hasClients) _scroll.jumpTo(0);
+          setState(() => _page = i);
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted) return;
+          files.add(await _createPng(permanent: !share));
+        }
+      } finally { if (mounted) setState(() => _page = original); }
       if (!mounted) return;
       if (share) {
-        await Share.shareXFiles([XFile(file.path, mimeType: 'image/png')],
-            text: 'Familia Prado · ${widget.report.title}');
+        await Share.shareXFiles(files.map((f)=>XFile(f.path, mimeType: 'image/png')).toList(),
+            text: 'Familia Prado · ${_report.title}');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Copia guardada en los archivos privados de la aplicación. '
@@ -102,11 +125,12 @@ class _ReportDialogState extends State<_ReportDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => Dialog(
+  Widget build(BuildContext context) => PopScope(canPop: !_busy, child: Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 18),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: SingleChildScrollView(
+            controller: _scroll,
             padding: const EdgeInsets.all(12),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Padding(
@@ -114,15 +138,20 @@ class _ReportDialogState extends State<_ReportDialog> {
                 child: Text('Vista previa · Imagen para compartir',
                     style: TextStyle(fontWeight: FontWeight.w700)),
               ),
+              if (widget.reports.length > 1) Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                IconButton(onPressed: _busy || _page == 0 ? null : () => setState(() => _page--), icon: const Icon(Icons.chevron_left)),
+                Text('Imagen ${_page+1} de ${widget.reports.length}'),
+                IconButton(onPressed: _busy || _page+1 == widget.reports.length ? null : () => setState(() => _page++), icon: const Icon(Icons.chevron_right)),
+              ]),
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: RepaintBoundary(
                   key: _imageKey,
-                  child: _ReportArtwork(report: widget.report),
+                  child: _ReportArtwork(report: _report),
                 ),
               ),
               const SizedBox(height: 14),
-              Text(widget.report.privacy,
+              Text(_report.privacy,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 12, color: PradoColors.muted)),
               const SizedBox(height: 12),
@@ -134,13 +163,13 @@ class _ReportDialogState extends State<_ReportDialog> {
                       icon: const Icon(Icons.save_alt), label: const Text('Guardar copia')),
                   FilledButton.icon(onPressed: _busy ? null : () => _export(share: true),
                       icon: const Icon(Icons.share_outlined),
-                      label: Text(_busy ? 'Preparando…' : 'Compartir')),
+                      label: Text(_busy ? 'Preparando…' : widget.reports.length > 1 ? 'Compartir todas' : 'Compartir')),
                 ],
               ),
             ]),
           ),
         ),
-      );
+      ));
 }
 
 class _ReportArtwork extends StatelessWidget {
@@ -150,11 +179,11 @@ class _ReportArtwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: 360,
-        height: 450,
+        height: report.expanded ? null : 450,
         color: PradoColors.cream,
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Container(height: 38, width: 38,
                 decoration: BoxDecoration(color: PradoColors.paleSand,
@@ -190,7 +219,18 @@ class _ReportArtwork extends StatelessWidget {
                     fontSize: 24, fontWeight: FontWeight.w900)),
               ])),
             const SizedBox(height: 14),
-            Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.start,
+            if (report.expanded)
+              for (final line in report.lines) Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: Container(width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(line.label, style: const TextStyle(color: PradoColors.navy, fontSize: 13, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text(line.value, style: TextStyle(color: PradoColors.ink, fontSize: 12, fontWeight: line.emphasis ? FontWeight.w700 : FontWeight.w400)),
+                  ]))),
+            if (!report.expanded) Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.start,
               children: [
                 for (final line in report.lines.take(5)) Padding(
                   padding: const EdgeInsets.only(bottom: 10),

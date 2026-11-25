@@ -23,6 +23,7 @@ class ShellScreen extends StatefulWidget {
 
 class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
   int tab = 0;
+  String appointmentBucket = 'UPCOMING';
   String displayName = 'Familiar';
   String role = '';
   late final LiveUpdates live;
@@ -59,7 +60,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
   void _onNotificationRoute(String route) {
     if (!mounted) return;
     switch (route) {
-      case 'citas': setState(() => tab = 3); break;
+      case 'citas': setState(() { appointmentBucket = 'UPCOMING'; tab = 3; }); break;
       case 'comidas': setState(() => tab = 1); break;
       case 'caja': setState(() => tab = 2); break;
       case 'avisos': _openAlerts(); break;
@@ -111,10 +112,11 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
     final screens = [
       HomeScreen(api: widget.api, displayName: displayName, role: role,
         onNavigate: (index) => setState(() => tab = index),
+        onAppointments: (bucket) => setState(() { appointmentBucket = bucket; tab = 3; }),
         onAlerts: _openAlerts, onCare: _openCare, alerts: alerts, updates: live),
       TurnsScreen(api: widget.api, updates: live),
       FundScreen(api: widget.api, updates: live),
-      AppointmentsScreen(api: widget.api, updates: live),
+      AppointmentsScreen(api: widget.api, updates: live, initialBucket: appointmentBucket),
       MembersScreen(api: widget.api, onLogout: widget.onLogout),
     ];
     return Scaffold(
@@ -153,7 +155,7 @@ class _ShellScreenState extends State<ShellScreen> with WidgetsBindingObserver {
       ),
       body: screens[tab],
       bottomNavigationBar: NavigationBar(
-        height: 78, selectedIndex: tab, onDestinationSelected: (v) => setState(() => tab = v),
+        height: 78, selectedIndex: tab, onDestinationSelected: (v) => setState(() { if (v == 3 && tab != 3) appointmentBucket = 'UPCOMING'; tab = v; }),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Inicio'),
           NavigationDestination(icon: Icon(Icons.restaurant_outlined), label: 'Comidas'),

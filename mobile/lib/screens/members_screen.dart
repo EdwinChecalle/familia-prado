@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../ui/prado_design.dart';
+import '../ui/prado_form.dart';
 
 class MembersScreen extends StatefulWidget {
   const MembersScreen({super.key, required this.api, required this.onLogout});
@@ -27,7 +28,7 @@ class _MembersScreenState extends State<MembersScreen> {
   Future<void> createAccount(Map<String,dynamic> member)async{
     final email=TextEditingController(),password=TextEditingController();
     try{
-      final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      final accepted=await showPradoForm<bool>(context:context,builder:(ctx)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, 
         title:Text('Crear acceso para ${member['name']}'),
         content:Column(mainAxisSize:MainAxisSize.min,children:[
           TextField(controller:email,keyboardType:TextInputType.emailAddress,
@@ -45,7 +46,7 @@ class _MembersScreenState extends State<MembersScreen> {
   Future<void> resetMemberAccess(Map<String,dynamic> member, Map<String,dynamic> account) async {
     final password=TextEditingController();
     try {
-      final accepted=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      final accepted=await showPradoForm<bool>(context:context,builder:(ctx)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, 
         title:Text('Restablecer acceso de ${member['name']}'),
         content:Column(mainAxisSize:MainAxisSize.min,children:[
           Text('Cuenta: ${account['email']}'),
@@ -69,7 +70,7 @@ class _MembersScreenState extends State<MembersScreen> {
   Future<void> changePassword()async{
     final old=TextEditingController(),newPass=TextEditingController();
     try{
-      final confirm=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      final confirm=await showPradoForm<bool>(context:context,builder:(ctx)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, 
         title:const Text('Cambiar mi contraseña'),content:Column(mainAxisSize:MainAxisSize.min,children:[
           TextField(controller:old,obscureText:true,decoration:const InputDecoration(labelText:'Contraseña actual')),
           const SizedBox(height:10),TextField(controller:newPass,obscureText:true,

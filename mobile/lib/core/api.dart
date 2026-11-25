@@ -50,10 +50,8 @@ class FamilyApi {
         await logout(localOnly: true);
         return false;
       }
-      // No cerrar sesiÃ³n por fallos temporales de red o por Render en reposo.
-      return true;
-    } catch (_) {
-      return true;
+      // Conservar el token; la pantalla de arranque permite reintentar.
+      rethrow;
     }
   }
 

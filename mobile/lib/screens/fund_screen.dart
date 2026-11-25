@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/live_updates.dart';
 import '../ui/prado_design.dart';
+import '../ui/prado_form.dart';
 import '../ui/family_report.dart';
+import '../ui/period_reports.dart';
 
 class FundScreen extends StatefulWidget {
   const FundScreen({super.key,required this.api, required this.updates});
@@ -35,7 +37,7 @@ class _FundScreenState extends State<FundScreen> {
   Future<void> collect() async {
     final concept=TextEditingController(),amount=TextEditingController();
     try{
-      final accept=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      final accept=await showPradoForm<bool>(context:context,builder:(ctx)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, 
         title:const Text('Nueva colecta familiar'),content:Column(mainAxisSize:MainAxisSize.min,children:[
           TextField(controller:concept,decoration:const InputDecoration(labelText:'¿Para qué se necesita el dinero?')),
           const SizedBox(height:10),TextField(controller:amount,keyboardType:const TextInputType.numberWithOptions(decimal:true),
@@ -53,8 +55,8 @@ class _FundScreenState extends State<FundScreen> {
     if(memberId==null&&members.isNotEmpty)memberId=members.first['id'];
     String method='YAPE';
     try{
-      final accept=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(
-        builder:(ctx,redraw)=>AlertDialog(title:const Text('Registrar un aporte'),content:
+      final accept=await showPradoForm<bool>(context:context,builder:(ctx)=>StatefulBuilder(
+        builder:(ctx,redraw)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, title:const Text('Registrar un aporte'),content:
           SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
             if(me['role']=='ADMIN') DropdownButtonFormField<String>(initialValue:memberId,
               decoration:const InputDecoration(labelText:'¿Quién aportó?'),
@@ -84,7 +86,7 @@ class _FundScreenState extends State<FundScreen> {
   Future<void> expense() async {
     final concept=TextEditingController(),amount=TextEditingController(),receipt=TextEditingController();
     try{
-      final accept=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Solicitar un gasto'),
+      final accept=await showPradoForm<bool>(context:context,builder:(ctx)=>AlertDialog(insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24), constraints: const BoxConstraints(maxWidth: 560, minWidth: 320), scrollable: true, title:const Text('Solicitar un gasto'),
         content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
           TextField(controller:concept,decoration:const InputDecoration(labelText:'Descripción de la compra')),
           const SizedBox(height:12),TextField(controller:amount,
@@ -205,6 +207,8 @@ class _FundScreenState extends State<FundScreen> {
                 style: const TextStyle(color: PradoColors.muted, fontSize: 15)),
               children: [Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 15),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  OutlinedButton.icon(onPressed: () => shareCollectionReport(context, widget.api, '${collection['id']}'),
+                    icon: const Icon(Icons.ios_share_outlined), label: const Text('Compartir reporte de colecta')),
                   OutlinedButton.icon(
                     onPressed: () => contribute(collection['id'], me, members),
                     icon: const Icon(Icons.payments_outlined),

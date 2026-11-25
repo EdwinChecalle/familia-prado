@@ -19,6 +19,9 @@ public class SecurityConfig {
             .httpBasic(basic -> basic.disable())
             .formLogin(form -> form.disable())
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            // Una sesión ausente, caducada o revocada es 401; los permisos insuficientes son 403.
+            .exceptionHandling(e -> e.authenticationEntryPoint((request,response,exception) ->
+                response.sendError(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED)))
             .authorizeHttpRequests(a -> a
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(HttpMethod.OPTIONS, "/**").denyAll()

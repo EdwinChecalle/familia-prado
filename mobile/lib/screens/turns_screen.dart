@@ -15,216 +15,115 @@ class TurnsScreen extends StatefulWidget {
 }
 
 class _TurnsScreenState extends State<TurnsScreen> {
-  late Future<List<dynamic>> data;
-  int selected = 0;
   DateTime visibleMonth = DateTime(peruToday().year, peruToday().month);
-  List<dynamic> checks = [];
-  bool submitting = false;
-  bool agendaView = true;
-  String? _loadedMonday;
-  String? _checksError;
-  bool _loadingChecks = false;
-  int _checksRequestId = 0;
-  final Map<String, List<dynamic>> _weekCache = {};
-  // Evita que las notificaciones de la red disparen varias recargas simultáneas.
+  bool calendarView = false;
+  bool _busy = true;
+  bool _writing = false;
+  bool _viewChanged = false;
+  String? _error;
+  String? _selectedMonday;
+  int _generation = 0;
   Timer? _pendingRefresh;
+  final Map<String, List<dynamic>> _monthCache = {};
+  List<dynamic> _weeks = [], _members = [], _swaps = [];
+  String? _displayedMonth;
+  Map<String, dynamic> _me = {};
+  static const _months = ['enero','febrero','marzo','abril','mayo','junio',
+    'julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  static const _palette = [Color(0xFF367F78), Color(0xFF3E6689),
+    Color(0xFF95663C), Color(0xFF785A8D), Color(0xFFA65C4D),
+    Color(0xFF486E50), Color(0xFF666D40), Color(0xFF515F91)];
 
-  @override void initState(){
+  @override void initState() {
     super.initState();
-    final today = peruToday();
-    selected = firstMonday(today)
-        .difference(firstMonday(DateTime(today.year, today.month, 1))).inDays ~/ 7;
-    refresh();
-    _restoreView();
     widget.updates.addListener(_onUpdate);
-  }
-  Future<void> _restoreView() async {
-    try {
-      final me = await widget.api.get('/api/auth/me') as Map<String, dynamic>;
-      final preferences = await SharedPreferences.getInstance();
-      final key = 'prado_view_${me['memberId'] ?? me['userId'] ?? 'admin'}';
-      if (mounted) setState(() => agendaView = preferences.getBool(key) ?? true);
-    } catch (_) { /* Safe default to compact agenda. */ }
-  }
-  Future<void> _saveView(bool agenda) async {
-    setState(() => agendaView = agenda);
-    try {
-      final me = await widget.api.get('/api/auth/me') as Map<String, dynamic>;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('prado_view_${me['memberId'] ?? me['userId'] ?? 'admin'}', agenda);
-    } catch (_) { /* View is still switched for this session. */ }
-  }
-
-  void _onUpdate() {
-    if (widget.updates.lastTopic == 'turns' || widget.updates.lastTopic == 'all') {
-      if (!mounted || submitting) return;
-      _pendingRefresh?.cancel();
-      _pendingRefresh = Timer(const Duration(milliseconds: 350), () {
-        if (mounted && !submitting) setState(refresh);
-      });
-    }
+    _selectedMonday = isoDate(firstMonday(peruToday()));
+    _load();
   }
   @override void dispose() {
     _pendingRefresh?.cancel();
     widget.updates.removeListener(_onUpdate);
     super.dispose();
   }
-  void refresh() {
-    // Descarta resultados antiguos de una carga previa de la pantalla.
-    final requestId = ++_checksRequestId;
-    data = Future.wait([
-      widget.api.get('/api/turns?from=${isoDate(firstMonday(DateTime(visibleMonth.year, visibleMonth.month, 1)))}&weeks=16'),
-      widget.api.get('/api/members'),
-      widget.api.get('/api/auth/me'),
-      widget.api.get('/api/swaps'),
-    ]);
-    data.then((result) {
-      if (!mounted || requestId != _checksRequestId) return;
-      final weeks = result[0] as List;
-      if (weeks.isNotEmpty) fetchChecks(weeks[selected]['monday'] as String);
-    }).catchError((Object error) {});
-  }
-
-  Future<void> fetchChecks(String monday) async {
-    final requestId = ++_checksRequestId;
-    if (!mounted) return;
-    final cached = _weekCache[monday];
-    setState(() {
-      _loadedMonday = cached == null ? null : monday;
-      checks = cached == null ? [] : List<dynamic>.from(cached);
-      _loadingChecks = true;
-      _checksError = null;
-    });
+  String get _monthKey => isoDate(visibleMonth);
+  String get _monthTitle => '${_months[visibleMonth.month - 1]} ${visibleMonth.year}';
+  String get _viewKey => 'prado_turn_calendar_${_me['memberId'] ?? _me['userId'] ?? 'admin'}';
+  Future<void> _restoreView() async {
+    final key = _viewKey;
     try {
-      final result = List<dynamic>.from(
-          await widget.api.get('/api/turns/$monday/meals') as List);
-      if (!mounted || requestId != _checksRequestId) return;
-      _weekCache[monday] = List<dynamic>.from(result);
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted && !_viewChanged && key == _viewKey) {
+        setState(() => calendarView = prefs.getBool(key) ?? false);
+      }
+    } catch (_) { /* preference is optional */ }
+  }
+  Future<void> _saveView(bool value) async {
+    setState(() { calendarView = value; _viewChanged = true; });
+    try { final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_viewKey, value);
+    } catch (_) { /* preference is optional */ }
+  }
+  void _onUpdate() {
+    if (widget.updates.lastTopic != 'turns' && widget.updates.lastTopic != 'all') return;
+    _monthCache.clear();
+    _pendingRefresh?.cancel();
+    _pendingRefresh = Timer(const Duration(milliseconds: 350), () {
+      if (mounted && !_writing) unawaited(_load());
+    });
+  }
+  Future<void> _load() async {
+    final request = ++_generation;
+    final key = _monthKey;
+    final month = visibleMonth;
+    final cached = _monthCache[key] ?? (_displayedMonth == key ? _weeks : null);
+    setState(() { _busy = true; _error = null; _weeks = cached ?? []; _displayedMonth = key; });
+    try {
+      final result = await Future.wait<dynamic>([
+        widget.api.get('/api/turns?from=${isoDate(firstMonday(month))}&weeks=${weeksInMonth(month.year, month.month).length}'),
+        widget.api.get('/api/members'),
+        widget.api.get('/api/auth/me'),
+        widget.api.get('/api/swaps'),
+      ]);
+      if (!mounted || request != _generation) return;
+      final weeks = List<dynamic>.from(result[0] as List);
+      final firstLoad = _me.isEmpty;
+      _monthCache[key] = weeks;
+      if (_monthCache.length > 8) _monthCache.remove(_monthCache.keys.first);
       setState(() {
-        checks = result;
-        _loadedMonday = monday;
-        _loadingChecks = false;
+        _weeks = weeks;
+        _members = result[1] as List;
+        _me = Map<String,dynamic>.from(result[2] as Map);
+        _swaps = result[3] as List;
+        _busy = false;
       });
+      if (firstLoad) unawaited(_restoreView());
     } catch (_) {
-      if (!mounted || requestId != _checksRequestId) return;
-      setState(() {
-        _loadingChecks = false;
-        _checksError = cached == null
-            ? 'No pudimos cargar esta semana. Comprueba tu conexión.'
-            : 'Sin conexión. Mostramos la última consulta; no puedes editar hasta actualizar.';
-      });
+      if (!mounted || request != _generation) return;
+      setState(() { _busy = false; _error = 'No se pudo actualizar el calendario. Comprueba tu conexión.'; });
     }
   }
-
-  void reload() {
-    _weekCache.clear();
-    setState(() {
-      checks = [];
-      _loadedMonday = null;
-      _checksError = null;
-      _loadingChecks = true;
-      refresh();
-    });
+  void reload() { _monthCache.clear(); unawaited(_load()); }
+  void _setMonth(DateTime month, {String? selected}) {
+    if (_writing) return;
+    setState(() { visibleMonth = DateTime(month.year, month.month); _selectedMonday = selected; });
+    unawaited(_load());
   }
-
-  void _changeMonth(int direction) {
-    if (submitting) return;
-    setState(() {
-      visibleMonth = DateTime(visibleMonth.year, visibleMonth.month + direction);
-      selected = 0;
-      refresh();
-    });
-  }
-
-  void _goToday() {
-    final today = peruToday();
-    setState(() {
-      visibleMonth = DateTime(today.year, today.month);
-      final beginning = firstMonday(DateTime(today.year, today.month, 1));
-      selected = firstMonday(today).difference(beginning).inDays ~/ 7;
-      refresh();
-    });
-  }
-
-  void _chooseWeek(int index, String monday) {
-    if (submitting) return;
-    // No volver a consultar si se selecciona la misma semana mientras carga.
-    if (selected == index && (_loadingChecks ||
-        (_loadedMonday == monday && _checksError == null))) return;
-    setState(() => selected = index);
-    fetchChecks(monday);
-  }
-
-  bool _overlapsMonth(String mondayText) => weekIntersectsMonth(
-      parseDate(mondayText), visibleMonth.year, visibleMonth.month);
-
-  String _weekTitle(String mondayText) {
-    final mon = parseDate(mondayText);
-    final sun = mon.add(const Duration(days: 6));
-    return '${mon.day}/${mon.month} – ${sun.day}/${sun.month}';
-  }
-
-  String get _monthTitle {
-    const names = ['enero','febrero','marzo','abril','mayo','junio',
-      'julio','agosto','septiembre','octubre','noviembre','diciembre'];
-    return '${names[visibleMonth.month - 1]} ${visibleMonth.year}';
-  }
-
   void notice(String message) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
-
-  bool done(String date, String type) => checks.any((x) =>
-    x['date'] == date && x['meal'] == type && x['completed'] == true);
-
-  Future<void> toggle(String monday, String date, String type) async {
-    if (submitting || _loadingChecks || _loadedMonday != monday) return;
-
-    // El contador y los botones utilizan la MISMA lista local de comidas.
-    final before = checks.map((x) => Map<String, dynamic>.from(x as Map)).toList();
-    final updated = before.map((x) => Map<String, dynamic>.from(x)).toList();
-    final nextValue = !done(date, type);
-    final index = updated.indexWhere((x) => x['date'] == date && x['meal'] == type);
-    if (index == -1) {
-      updated.add({'date': date, 'meal': type, 'completed': nextValue});
-    } else {
-      updated[index]['completed'] = nextValue;
-    }
-    setState(() {
-      submitting = true;
-      checks = updated; // Cambio inmediato, incluso sin respuesta del servidor.
-    });
-
-    try {
-      await widget.api.put('/api/turns/$monday/meals', {
-        'date': date, 'meal': type, 'completed': nextValue,
-      });
-      // Reconciliar con PostgreSQL. Si falla esta consulta, no se revierte un PUT exitoso.
-      try {
-        final server = List<dynamic>.from(
-            await widget.api.get('/api/turns/$monday/meals') as List);
-        if (mounted && _loadedMonday == monday) {
-          _weekCache[monday] = List<dynamic>.from(server);
-          setState(() => checks = server);
-        }
-      } catch (_) {
-        // PUT completado: conservar el dato optimista, pero no considerarlo
-        // verificado ni reemplazar la copia de lectura hasta reconciliar.
-        _weekCache.remove(monday);
-        notice('Comida guardada, pero no se pudo comprobar el estado actualizado.');
-      }
-    } catch (e) {
-      // El PUT fue rechazado: recuperar el estado anterior en la semana correcta.
-      if (mounted && _loadedMonday == monday) {
-        setState(() => checks = before);
-      }
-      notice('No se pudo guardar la comida. Se revirtió el cambio: $e');
-    } finally {
-      if (mounted) setState(() => submitting = false);
-    }
+  String _range(DateTime monday) {
+    final sunday = DateTime(monday.year, monday.month, monday.day + 6);
+    return '${dateSpanish(monday)} – ${dateSpanish(sunday)}';
   }
-
+  bool _isCurrent(DateTime monday) => isoDate(monday) == isoDate(firstMonday(peruToday()));
+  Color _color(Map<String,dynamic> week) {
+    final id = '${week['memberId'] ?? week['memberName']}';
+    final index = _members.indexWhere((m) => '${m['id']}' == id);
+    final stable = id.codeUnits.fold<int>(0, (a,b) => a+b);
+    return _palette[(index < 0 ? stable : index) % _palette.length];
+  }
   Future<void> configure(List<dynamic> members) async {
+    if (members.isEmpty || _writing || _busy || _error != null) return;
     final ordered = members.map((m) => Map<String,dynamic>.from(m as Map)).toList();
     final first=ValueNotifier<String>(ordered.first['id'] as String);
     DateTime date=firstMonday(peruToday());
@@ -262,41 +161,59 @@ class _TurnsScreenState extends State<TurnsScreen> {
           actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancelar')),
             FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Confirmar orden'))]
         )));
-      if(saved==true){
+      if(saved==true && mounted){
+        setState(() => _writing = true);
         await widget.api.put('/api/admin/rotation',{
           'anchorMonday':isoDate(date),'memberIdsInOrder':ordered.map((x)=>x['id']).toList(),
           'memberStarting':first.value,
         });
-        reload();notice('Calendario confirmado');
+        if (mounted) { reload(); notice('Calendario confirmado'); }
       }
-    }catch(e){notice(e.toString());} finally {first.dispose();}
+    }catch(e){notice(e.toString());} finally {first.dispose(); if (mounted) setState(() => _writing = false);}
   }
 
-  Future<void> swap(String first, List<dynamic> weeks) async {
+  Future<void> swap(String first) async {
+    if (_writing || _busy || _error != null) return;
+    setState(() => _writing = true);
+    List<dynamic> weeks;
+    try {
+      // Preserve a 16-week selection for swaps without querying those weeks on every visit.
+      final current = firstMonday(peruToday());
+      final start = firstMonday(visibleMonth);
+      final from = start.isAfter(current) ? start : current;
+      weeks = List<dynamic>.from(await widget.api.get('/api/turns?from=${isoDate(from)}&weeks=16') as List);
+    } catch (_) {
+      notice('No se pudieron cargar las semanas disponibles. Reintenta.');
+      return;
+    } finally { if (mounted) setState(() => _writing = false); }
+    if (!mounted) return;
     String? other;
-    final candidates=weeks.where((w)=>w['monday']!=first && DateTime.parse(w['monday']).isAfter(DateTime.now())).toList();
+    final candidates=weeks.where((w)=>w['monday']!=first && parseDate(w['monday'] as String).isAfter(firstMonday(peruToday()))).toList();
     if(candidates.isEmpty){notice('No hay semanas futuras disponibles');return;}
     other=candidates.first['monday'] as String;
     final accepted=await showDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(
       builder:(ctx,setLocal)=>AlertDialog(title:const Text('Solicitar cambio de semana'),content:Column(
         mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
-          Text('Semana que deseas cambiar: $first'),const SizedBox(height:12),
+          Text('Semana que deseas cambiar: ${dateSpanish(parseDate(first))}'),const SizedBox(height:12),
           DropdownButton<String>(value:other,isExpanded:true,
             items:candidates.map((w)=>DropdownMenuItem<String>(value:w['monday'] as String,
-              child:Text('${w['memberName']} — ${w['monday']}'))).toList(),
+              child:Text('${w['memberName']} — ${dateSpanish(parseDate(w['monday'] as String))}', overflow: TextOverflow.ellipsis))).toList(),
             onChanged:(v)=>setLocal(()=>other=v)),
           const Text('El otro familiar deberá aceptar antes de realizar el intercambio.'),
         ]),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancelar')),
           FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Solicitar'))])));
-    if(accepted==true&&other!=null){
-      try{await widget.api.post('/api/swaps',{'firstMonday':first,'secondMonday':other});reload();notice('Solicitud enviada');}
-      catch(e){notice(e.toString());}
+    if(accepted==true&&other!=null&&mounted){
+      setState(() => _writing = true);
+      try{await widget.api.post('/api/swaps',{'firstMonday':first,'secondMonday':other});if (mounted) { reload(); notice('Solicitud enviada'); }}
+      catch(e){notice(e.toString());} finally {if (mounted) setState(() => _writing = false);}
     }
   }
 
   Future<void> decision(String id,bool accept) async {
-    try{await widget.api.post('/api/swaps/$id/decision',{'accept':accept});reload();notice(accept?'Intercambio aceptado':'Solicitud rechazada');}
-    catch(e){notice(e.toString());}
+    if (_writing || _busy || _error != null) return;
+    setState(() => _writing = true);
+    try{await widget.api.post('/api/swaps/$id/decision',{'accept':accept});if (mounted) { reload(); notice(accept?'Intercambio aceptado':'Solicitud rechazada'); }}
+    catch(e){notice(e.toString());} finally {if (mounted) setState(() => _writing = false);}
   }
 
   Future<void> _shareWeek(Map<String, dynamic> week) async {
@@ -320,237 +237,141 @@ class _TurnsScreenState extends State<TurnsScreen> {
     ));
   }
 
-  @override Widget build(BuildContext context) => FutureBuilder<List<dynamic>>(
-    future: data, builder: (context, snap) {
-      if (!snap.hasData) {
-        return Center(child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (!snap.hasError) ...[
-              const CircularProgressIndicator(),
-              const SizedBox(height: 18),
-              const Text('Conectando con Familia Prado...',
-                textAlign: TextAlign.center),
-              const SizedBox(height: 8),
-              const Text('Si el servidor gratuito estaba en reposo, la primera carga puede tardar.',
-                textAlign: TextAlign.center),
-            ] else ...[
-              const Icon(Icons.wifi_off_outlined, size: 36),
-              const SizedBox(height: 10),
-              const Text('No se pudo cargar Comidas.',
-                textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(onPressed: reload,
-                icon: const Icon(Icons.refresh), label: const Text('Reintentar')),
-            ],
-          ]),
-        ));
-      }
-      final weeks = snap.data![0] as List;
-      final members = snap.data![1] as List;
-      final me = snap.data![2] as Map<String, dynamic>;
-      final swaps = snap.data![3] as List;
-      if (weeks.isEmpty) return const PradoEmpty(title: 'Sin turnos',
-        detail: 'No se encontraron semanas disponibles.');
-      final safeIndex = selected < weeks.length ? selected : weeks.length - 1;
-      final current = weeks[safeIndex] as Map<String, dynamic>;
-      final monday = parseDate(current['monday'] as String);
-      final completedMeals = _loadedMonday == current['monday']
-        ? checks.where((x) => x['completed'] == true).length
-        : ((current['completedMeals'] as num?)?.toInt() ?? 0);
-      final canEditChecks = _loadedMonday == current['monday'] &&
-          !_loadingChecks && !submitting && _checksError == null;
-      final isResponsible = me['role'] == 'ADMIN' || me['memberId'] == current['memberId'];
-      return RefreshIndicator(onRefresh: () async { reload(); await data; },
-        child: ListView(padding: const EdgeInsets.all(16), children: [
-          const PradoIntro(eyebrow: 'Nos cuidamos en familia',
-            title: 'Turnos de comida',
-            subtitle: 'Cada semana, una persona acompaña con cariño.',
-            icon: Icons.restaurant_outlined, tint: PradoColors.paleSand),
-          if (current['configured'] != true) ...[
-            PradoPanel(tint: PradoColors.peach, child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const PradoPill('Calendario provisional',
-                  color: PradoColors.coral, tint: PradoColors.peach),
-                const SizedBox(height: 8),
-                const Text('Confirma el orden real antes de registrar comidas.'),
-                if (me['role'] == 'ADMIN') FilledButton(
-                  onPressed: () => configure(members),
-                  child: const Text('Confirmar calendario')),
-              ])),
-            const SizedBox(height: 14),
-          ],
-          PradoSectionHeading('Calendario de responsables',
-            subtitle: 'Consulta el mes sin desplazarte entre semanas.'),
-          PradoPanel(tint: PradoColors.cream, child: Column(children: [
-            Row(children: [
-              IconButton(tooltip: 'Mes anterior', onPressed: submitting ? null : () => _changeMonth(-1),
-                icon: const Icon(Icons.chevron_left)),
-              Expanded(child: Text(_monthTitle, textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium)),
-              IconButton(tooltip: 'Mes siguiente', onPressed: submitting ? null : () => _changeMonth(1),
-                icon: const Icon(Icons.chevron_right)),
-              TextButton(onPressed: submitting ? null : _goToday, child: const Text('Hoy')),
-            ]),
-            const SizedBox(height: 8),
-            for (var i = 0; i < weeks.length; i++)
-              if (_overlapsMonth(weeks[i]['monday'] as String))
-                Padding(padding: const EdgeInsets.only(bottom: 7),
-                  child: Material(color: selected == i ? PradoColors.paleBlue : Colors.white,
-                    borderRadius: BorderRadius.circular(15),
-                    child: InkWell(borderRadius: BorderRadius.circular(15),
-                      onTap: submitting ? null : () => _chooseWeek(i, weeks[i]['monday'] as String),
-                      child: Padding(padding: const EdgeInsets.all(13), child: Row(children: [
-                        Icon(selected == i ? Icons.event_available : Icons.calendar_month_outlined,
-                          color: PradoColors.ocean, size: 23),
-                        const SizedBox(width: 12),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                          Text(_weekTitle(weeks[i]['monday'] as String),
-                            style: const TextStyle(fontWeight: FontWeight.w700)),
-                          const SizedBox(height: 3),
-                          Text('${weeks[i]['memberName']}',
-                            style: const TextStyle(fontSize: 16)),
-                        ])),
-                        if (selected == i) const Icon(Icons.check_circle, color: PradoColors.teal),
-                        const Icon(Icons.chevron_right, color: PradoColors.muted),
-                      ]))))),
-            if (weeks.any((w) => w['configured'] != true))
-              const Padding(padding: EdgeInsets.only(top: 8),
-                child: Text('Orden provisional pendiente de confirmación.',
-                  style: TextStyle(color: PradoColors.coral))),
-          ])),
-          const SizedBox(height: 16),
-          PradoPanel(tint: PradoColors.paleBlue,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('RESPONSABLE DE LA SEMANA', style: TextStyle(
-                letterSpacing: 1.1, fontSize: 12, color: PradoColors.ocean,
-                fontWeight: FontWeight.w800)),
-              const SizedBox(height: 5),
-              Text('${current['memberName']}', style: Theme.of(context).textTheme.titleLarge),
-              Text('${dateSpanish(monday)} al ${dateSpanish(monday.add(const Duration(days: 6)))}',
-                style: const TextStyle(color: PradoColors.muted, fontSize: 15)),
-              const SizedBox(height: 13),
-              Row(children: [
-                Expanded(child: Text('$completedMeals de 21 comidas registradas',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-                PradoPill('${(completedMeals / 21 * 100).round()}%'),
+
+  Widget _weekRow(Map<String,dynamic> week, bool selected) {
+    final monday = parseDate(week['monday'] as String);
+    final color = _color(week);
+    final current = _isCurrent(monday);
+    final name = '${week['memberName']}';
+    return Padding(padding: const EdgeInsets.only(bottom: 10), child: PradoPanel(
+      tint: selected ? PradoColors.paleBlue : PradoColors.paper,
+      padding: const EdgeInsets.all(14),
+      onTap: () => setState(() => _selectedMonday = week['monday'] as String),
+      child: Row(children: [
+        Container(width: 44, height: 48, decoration: BoxDecoration(color: color,
+          borderRadius: BorderRadius.circular(14)), child: const Icon(Icons.person_outline, color: Colors.white)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (current) const Text('SEMANA ACTUAL', style: TextStyle(color: PradoColors.teal,
+            fontWeight: FontWeight.w800, fontSize: 11, letterSpacing: .7)),
+          Text(name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+          const SizedBox(height: 4),
+          Text(_range(monday), style: const TextStyle(color: PradoColors.muted, fontSize: 14)),
+        ])),
+        Icon(selected ? Icons.check_circle : Icons.chevron_right, color: selected ? color : PradoColors.muted),
+      ])));
+  }
+  Widget _calendar(List<Map<String,dynamic>> weeks, Map<String,dynamic>? selected) {
+    final today = peruToday();
+    final byMonday = {for (final w in weeks) w['monday']: w};
+    return PradoPanel(padding: const EdgeInsets.all(10), child: Column(children: [
+      Row(children: [for (final day in const ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'])
+        Expanded(child: Text(day, textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 11, color: PradoColors.muted, fontWeight: FontWeight.w700)))]),
+      const SizedBox(height: 8),
+      for (final monday in weeksInMonth(visibleMonth.year, visibleMonth.month)) ...[
+        Builder(builder: (context) {
+          final week = byMonday[isoDate(monday)];
+          final color = week == null ? PradoColors.muted : _color(week);
+          final isSelected = week != null && week['monday'] == selected?['monday'];
+          return Padding(padding: const EdgeInsets.only(bottom: 8), child: Material(
+            color: color.withValues(alpha: .10), borderRadius: BorderRadius.circular(12),
+            child: InkWell(borderRadius: BorderRadius.circular(12),
+              onTap: week == null ? null : () => setState(() => _selectedMonday = week['monday'] as String),
+              child: Padding(padding: const EdgeInsets.all(5), child: Column(children: [
+                Row(children: List.generate(7, (i) {
+                  final day = DateTime(monday.year, monday.month, monday.day+i);
+                  final current = isoDate(day) == isoDate(today);
+                  return Expanded(child: Center(child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 3),
+                    decoration: current ? BoxDecoration(color: PradoColors.navy, borderRadius: BorderRadius.circular(8)) : null,
+                    child: Text('${day.day}', style: TextStyle(fontSize: 14,
+                      fontWeight: current ? FontWeight.w800 : FontWeight.w500,
+                      color: current ? Colors.white : day.month == visibleMonth.month ? PradoColors.ink : PradoColors.muted)))));
+                })),
+                const SizedBox(height: 4),
+                Container(width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                  decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(9)),
+                  child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(week == null ? 'Sin turno disponible' : '${week['memberName']}',
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                    Text(_range(monday), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  ])), if (isSelected) const Icon(Icons.check_circle_outline, color: Colors.white, size: 20)])),
+              ])))),
+          );
+        }),
+      ],
+    ]));
+  }
+  @override Widget build(BuildContext context) {
+    final weeks = _weeks.map((w) => Map<String,dynamic>.from(w as Map)).where((w) =>
+      weekIntersectsMonth(parseDate(w['monday'] as String), visibleMonth.year, visibleMonth.month)).toList()
+      ..sort((a,b) => ('${a['monday']}').compareTo('${b['monday']}'));
+    Map<String,dynamic>? selected;
+    for (final w in weeks) { if (w['monday'] == _selectedMonday) { selected = w; break; } }
+    selected ??= weeks.isEmpty ? null : weeks.first;
+    final current = selected;
+    final fresh = !_busy && !_writing && _error == null;
+    return RefreshIndicator(onRefresh: () async { if (!_writing) { _monthCache.remove(_monthKey); await _load(); } },
+      child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(16), children: [
+        const PradoIntro(eyebrow: 'Nos cuidamos en familia', title: 'Turnos de comida',
+          subtitle: 'Organización semanal de Papá Isidro.', icon: Icons.restaurant_outlined, tint: PradoColors.paleSand),
+        if (current != null) ...[
+          PradoPanel(tint: PradoColors.mint, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_isCurrent(parseDate(current['monday'] as String)) ? 'RESPONSABLE ESTA SEMANA' : 'TURNO SELECCIONADO',
+              style: const TextStyle(color: PradoColors.teal, letterSpacing: 1, fontWeight: FontWeight.w800, fontSize: 12)),
+            const SizedBox(height: 8), Text('${current['memberName']}', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6), Text(_range(parseDate(current['monday'] as String))),
+            const Divider(height: 22), const PradoInfoRow(icon: Icons.restaurant_outlined, text: 'Desayuno, almuerzo y cena'),
+          ])), const SizedBox(height: 12),
+        ],
+        if (weeks.any((w) => w['configured'] != true)) ...[
+          PradoPanel(tint: PradoColors.peach, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Calendario provisional. Confirma el orden familiar.'),
+            if (_me['role'] == 'ADMIN') FilledButton(onPressed: fresh ? () => configure(_members) : null,
+              child: const Text('Confirmar calendario')),
+          ])), const SizedBox(height: 12),
+        ],
+        SizedBox(width: double.infinity, child: SegmentedButton<bool>(showSelectedIcon: false,
+          segments: const [ButtonSegment(value: false, label: Text('Lista'), icon: Icon(Icons.view_agenda_outlined)),
+            ButtonSegment(value: true, label: Text('Calendario'), icon: Icon(Icons.calendar_month_outlined))],
+          selected: {calendarView}, onSelectionChanged: (v) => _saveView(v.first))),
+        const SizedBox(height: 10),
+        Row(children: [IconButton(tooltip: 'Mes anterior', onPressed: _writing ? null : () => _setMonth(DateTime(visibleMonth.year, visibleMonth.month-1)), icon: const Icon(Icons.chevron_left)),
+          Expanded(child: Text(_monthTitle, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium)),
+          IconButton(tooltip: 'Mes siguiente', onPressed: _writing ? null : () => _setMonth(DateTime(visibleMonth.year, visibleMonth.month+1)), icon: const Icon(Icons.chevron_right)),
+        ]),
+        Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: _writing ? null : () {
+          final today = peruToday(); _setMonth(today, selected: isoDate(firstMonday(today)));
+        }, icon: const Icon(Icons.today_outlined), label: const Text('Hoy'))),
+        if (_busy) ...[const LinearProgressIndicator(), const SizedBox(height: 8),
+          Text(weeks.isEmpty ? 'Conectando con Familia Prado… Si el servidor estaba en reposo, puede tardar.' : 'Actualizando turnos…')],
+        if (_error != null) PradoPanel(tint: PradoColors.peach, child: Column(children: [Text(_error!),
+          if (weeks.isNotEmpty) const Text('Mostramos la última consulta de este mes.'),
+          TextButton.icon(onPressed: _load, icon: const Icon(Icons.refresh), label: const Text('Reintentar'))])),
+        if (weeks.isNotEmpty) ...[
+          if (calendarView) _calendar(weeks, current) else for (final w in weeks) _weekRow(w, w['monday'] == current?['monday']),
+        ] else if (!_busy && _error == null) const PradoEmpty(title: 'Sin turnos', detail: 'No hay semanas disponibles en este mes.'),
+        if (current != null) ...[
+          const SizedBox(height: 12), OutlinedButton.icon(onPressed: fresh ? () => _shareWeek(current) : null,
+            icon: const Icon(Icons.ios_share_outlined), label: const Text('Compartir esta semana en imagen')),
+          if (current['configured'] == true && parseDate(current['monday'] as String).isAfter(firstMonday(peruToday())) &&
+              (_me['role'] == 'ADMIN' || _me['memberId'] == current['memberId']))
+            OutlinedButton.icon(onPressed: fresh ? () => swap(current['monday'] as String) : null,
+              icon: const Icon(Icons.swap_horiz), label: const Text('Solicitar intercambio')),
+        ],
+        if (_swaps.any((s) => s['status'] == 'PENDING')) ...[
+          const SizedBox(height: 12), const PradoSectionHeading('Solicitudes de intercambio'),
+          for (final s in _swaps.where((s) => s['status'] == 'PENDING')) Padding(padding: const EdgeInsets.only(bottom: 10),
+            child: PradoPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Cambiar ${dateSpanish(parseDate(s['weekA'] as String))} por ${dateSpanish(parseDate(s['weekB'] as String))}',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (_me['role'] == 'ADMIN' || _me['memberId'] == s['memberB']) Wrap(spacing: 8, children: [
+                OutlinedButton(onPressed: fresh ? () => decision(s['id'] as String, false) : null, child: const Text('Rechazar')),
+                FilledButton(onPressed: fresh ? () => decision(s['id'] as String, true) : null, child: const Text('Aceptar cambio')),
               ]),
-              const SizedBox(height: 7),
-              LinearProgressIndicator(value: completedMeals / 21,
-                minHeight: 8, borderRadius: BorderRadius.circular(10),
-                color: PradoColors.teal, backgroundColor: Colors.white),
-              if (current['configured'] == true &&
-                  monday.isAfter(firstMonday(peruToday())) && isResponsible) ...[
-                const SizedBox(height: 9),
-                OutlinedButton.icon(onPressed: () => swap(current['monday'], weeks),
-                  icon: const Icon(Icons.swap_horiz), label: const Text('Solicitar intercambio')),
-              ],
-            ])),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(onPressed: () => _shareWeek(current),
-            icon: const Icon(Icons.ios_share_outlined),
-            label: const Text('Compartir esta semana en imagen')),
-          const SizedBox(height: 16),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Ver semana como', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            SizedBox(width: double.infinity, child: SegmentedButton<bool>(showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: true, label: Text('Agenda'), icon: Icon(Icons.view_agenda_outlined)),
-                ButtonSegment(value: false, label: Text('Detalle'), icon: Icon(Icons.checklist_outlined)),
-              ],
-              selected: {agendaView}, onSelectionChanged: (v) => _saveView(v.first))),
-          ]),
-          const SizedBox(height: 8),
-          if (_loadingChecks) const Padding(padding: EdgeInsets.symmetric(vertical: 10),
-            child: LinearProgressIndicator()),
-          if (_checksError != null) PradoPanel(tint: PradoColors.peach,
-            child: Column(children: [
-              Text(_checksError!),
-              TextButton.icon(onPressed: () => fetchChecks(current['monday'] as String),
-                icon: const Icon(Icons.refresh), label: const Text('Reintentar')),
-            ])),
-          if (!isResponsible) const Padding(padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('Solo el responsable de esta semana puede marcar las comidas.',
-              style: TextStyle(color: PradoColors.muted, fontSize: 14))),
-          if (agendaView) ...List.generate(7, (day) {
-            final date = monday.add(Duration(days: day));
-            final key = isoDate(date);
-            final count = ['BREAKFAST', 'LUNCH', 'DINNER']
-              .where((type) => done(key, type)).length;
-            return Padding(padding: const EdgeInsets.only(bottom: 10),
-              child: PradoPanel(child: Row(children: [
-                Container(width: 52, height: 54,
-                  decoration: BoxDecoration(color: count == 3
-                    ? PradoColors.mint : PradoColors.paleSand,
-                    borderRadius: BorderRadius.circular(15)),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Text('${date.day}', style: const TextStyle(
-                      color: PradoColors.navy, fontSize: 20, fontWeight: FontWeight.w800)),
-                    Text('${date.month}/${date.year.toString().substring(2)}',
-                      style: const TextStyle(fontSize: 10, color: PradoColors.muted)),
-                  ])),
-                const SizedBox(width: 12),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(daysSpanish[day], style: const TextStyle(
-                    fontWeight: FontWeight.w800, fontSize: 17)),
-                  Text(count == 3 ? 'Día completo' : count == 0 ? 'Sin registros'
-                    : '$count de 3 comidas registradas',
-                    style: const TextStyle(color: PradoColors.muted, fontSize: 14)),
-                ])),
-                PradoPill('$count/3', color: count == 3 ? PradoColors.teal : PradoColors.ocean,
-                  tint: count == 3 ? PradoColors.mint : PradoColors.paleBlue,
-                  icon: count == 3 ? Icons.check_circle : Icons.timelapse),
-              ])));
-          }) else ...List.generate(7, (day) {
-            final date = monday.add(Duration(days: day));
-            final key = isoDate(date);
-            return Padding(padding: const EdgeInsets.only(bottom: 11),
-              child: PradoPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  PradoSectionHeading('${daysSpanish[day]} · ${date.day}/${date.month}'),
-                  for (final meal in const [
-                    ('BREAKFAST', 'Desayuno'), ('LUNCH', 'Almuerzo'), ('DINNER', 'Cena'),
-                  ]) Padding(padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(children: [
-                      Icon(done(key, meal.$1) ? Icons.check_circle_rounded
-                        : Icons.circle_outlined,
-                        color: done(key, meal.$1) ? PradoColors.teal : PradoColors.muted,
-                        size: 25),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(meal.$2, style: const TextStyle(fontSize: 16))),
-                      done(key, meal.$1)
-                        ? OutlinedButton(onPressed: !canEditChecks ||
-                            current['configured'] != true || date.isAfter(peruToday()) || !isResponsible
-                            ? null : () => toggle(current['monday'], key, meal.$1),
-                            child: const Text('Desmarcar'))
-                        : FilledButton.tonal(onPressed: !canEditChecks ||
-                            current['configured'] != true || date.isAfter(peruToday()) || !isResponsible
-                            ? null : () => toggle(current['monday'], key, meal.$1),
-                            child: const Text('Marcar')),
-                    ])),
-                ])));
-          }),
-          if (swaps.any((s) => s['status'] == 'PENDING')) ...[
-            const SizedBox(height: 10),
-            const PradoSectionHeading('Solicitudes de intercambio'),
-            for (final s in swaps.where((s) => s['status'] == 'PENDING'))
-              Padding(padding: const EdgeInsets.only(bottom: 10),
-                child: PradoPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Cambiar ${s['weekA']} por ${s['weekB']}',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                    if (me['role'] == 'ADMIN' || me['memberId'] == s['memberB'])
-                      Wrap(spacing: 8, children: [
-                        OutlinedButton(onPressed: () => decision(s['id'], false),
-                          child: const Text('Rechazar')),
-                        FilledButton(onPressed: () => decision(s['id'], true),
-                          child: const Text('Aceptar cambio')),
-                      ]),
-                  ]))),
-          ],
-          const SizedBox(height: 24),
-        ]));
-    });
+            ]))),
+        ], const SizedBox(height: 24),
+      ]));
+  }
 }
