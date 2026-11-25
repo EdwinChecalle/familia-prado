@@ -67,7 +67,9 @@ public class CareDocumentsController {
     @GetMapping
     public List<Document> list() {
         access.require();
-        checkEnabled();
+        // En staging, los documentos pueden estar deshabilitados sin bloquear
+        // medicamentos, registros y observaciones en la pantalla de Cuidado.
+        if (!enabled) return List.of();
         return db.query("""
             SELECT d.id,d.title,d.category,d.original_name,d.mime_type,d.size_bytes,d.uploaded_at,
                    COALESCE(m.display_name,'Administrador') author
